@@ -74,6 +74,14 @@ class _AppDrawerState extends State<AppDrawer> {
                   },
                 ),
                 ListTile(
+                  selected: menu == "shift_dashboard",
+                  leading: const Icon(Icons.dashboard_outlined),
+                  title: const Text("Shift Dashboard"),
+                  onTap: () {
+                    Navigator.pushReplacementNamed(context, '/shift_dashboard');
+                  },
+                ),
+                ListTile(
                   selected: menu == "fuel_log",
                   leading: const Icon(Icons.local_gas_station_rounded),
                   title: const Text("Fuel Log"),

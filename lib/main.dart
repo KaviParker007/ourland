@@ -12,6 +12,7 @@ import 'package:ourlandnew/pages/login.dart';
 import 'package:ourlandnew/pages/notifications/notification_list_page.dart';
 import 'package:ourlandnew/pages/operation/operation_page.dart';
 import 'package:ourlandnew/pages/shifts/shift_list.dart';
+import 'package:ourlandnew/pages/shifts/shift_dashboard.dart';
 import 'package:ourlandnew/pages/zones/zones_list.dart';
 import 'package:ourlandnew/theme/dark_mode.dart';
 
@@ -37,6 +38,7 @@ class MyApp extends StatelessWidget {
         "/vehicles_list": (context) => const VehiclesList(),
         "/zones_list": (context) => const ZonesList(),
         "/shift_list": (context) => const ShiftListPage(),
+        "/shift_dashboard": (context) => const ShiftDashboardPage(),
         "/fuel_log_list": (context) => const FuelLogList(),
         "/job_card_list": (context) => const JobCardList(),
         "/fuel_station_list": (context) => const FuelStationList(),

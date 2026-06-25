@@ -2,9 +2,9 @@
     "generation": 1,
     "modules": [
         {
-            "id": "ourlandnew",
-            "name": "ourlandnew",
-            "path": "ourlandnew"
+            "id": "ourland",
+            "name": "ourland",
+            "path": "ourland"
         }
     ]
 }
