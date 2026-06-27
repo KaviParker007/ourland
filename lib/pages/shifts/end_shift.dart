@@ -119,8 +119,9 @@ class _EndShiftPageState extends State<EndShiftPage> {
       var response = await endShift(data, images);
       if (response.statusCode == 200) {
         successMsg('shift end successfully');
-        Navigator.pop(context);
-        Navigator.pushNamed(context, '/shift_list');
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/shift_dashboard');
+        }
       } else {
         print(response.body);
         errorMsg(response.body);

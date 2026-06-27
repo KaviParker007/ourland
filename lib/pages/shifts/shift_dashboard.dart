@@ -7,6 +7,7 @@ import 'package:ourlandnew/components/drawer_page.dart';
 import 'package:ourlandnew/config.dart';
 import 'package:ourlandnew/pages/notifications/notification_bell.dart';
 import 'queried_shifts_page.dart';
+import 'add_shift.dart';
 
 const _kVehicleTypes = ['Tipper', 'Tractor', 'LCV', 'EMV', 'Compactor'];
 
@@ -245,6 +246,17 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
         actions: const [NotificationBellWidget()],
       ),
       drawer: const AppDrawer(),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => AddShiftPage()),
+        ),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text(
+          'New Shift',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
       body: Column(
         children: [
           _buildControls(),

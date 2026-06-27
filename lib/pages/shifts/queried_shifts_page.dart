@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:intl/intl.dart';
 import 'package:ourlandnew/config.dart';
+import 'rotate_shift.dart';
+import 'end_shift.dart';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -371,8 +374,9 @@ class _ShiftCard extends StatelessWidget {
     final isActive = shift['end_time'] == null;
     final vtColor =
         _kVtColors[shift['vehicle_type']?.toString()] ?? Colors.grey;
+    final shiftId = (shift['id'] as num?)?.toInt() ?? 0;
 
-    return Card(
+    final card = Card(
       margin: const EdgeInsets.only(bottom: 10),
       shape:
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -535,6 +539,46 @@ class _ShiftCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+
+    if (!isActive) return card;
+
+    return Slidable(
+      key: ValueKey(shiftId),
+      endActionPane: ActionPane(
+        motion: const ScrollMotion(),
+        extentRatio: 0.5,
+        children: [
+          SlidableAction(
+            onPressed: (_) => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => RotateShiftPage(shiftId: shiftId)),
+            ),
+            backgroundColor:
+                Theme.of(context).colorScheme.inversePrimary,
+            foregroundColor: Colors.white,
+            borderRadius: BorderRadius.circular(15),
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            icon: Icons.repeat_rounded,
+            label: 'Rotate',
+          ),
+          SlidableAction(
+            onPressed: (_) => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => EndShiftPage(shiftId: shiftId)),
+            ),
+            backgroundColor: Theme.of(context).colorScheme.error,
+            foregroundColor: Colors.white,
+            borderRadius: BorderRadius.circular(15),
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            icon: Icons.timer_off_rounded,
+            label: 'End',
+          ),
+        ],
+      ),
+      child: card,
     );
   }
 }

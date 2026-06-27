@@ -91,8 +91,9 @@ class _RotateShiftPageState extends State<RotateShiftPage> {
      var response = await rotateShift(data);
       if (response.statusCode == 200) {
         successMsg('shift swap successfully');
-        Navigator.pop(context);
-        Navigator.pushNamed(context, '/shift_list');
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/shift_dashboard');
+        }
       } else {
         print(response.body);
         errorMsg(response.body);
