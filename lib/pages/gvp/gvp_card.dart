@@ -1,0 +1,271 @@
+// ─── GVP Module — Reusable GVP card ───────────────────────────────────────────
+//
+// One card used by both the GVP List and the Queried GVP List. Actions are
+// opt-in: pass a callback to show that action, omit it to hide the button.
+
+import 'package:flutter/material.dart';
+import 'gvp_models.dart';
+
+class GvpCard extends StatelessWidget {
+  final Gvp gvp;
+  final VoidCallback? onView;
+  final VoidCallback? onEdit;
+  final VoidCallback? onImages;
+
+  /// Resolved zone/ward names. When null, the numeric ID is shown as a fallback.
+  final String? zoneName;
+  final String? wardName;
+
+  const GvpCard({
+    super.key,
+    required this.gvp,
+    this.onView,
+    this.onEdit,
+    this.onImages,
+    this.zoneName,
+    this.wardName,
+  });
+
+  bool get _hasLocation =>
+      (gvp.latitude != null && gvp.latitude!.isNotEmpty) &&
+      (gvp.longitude != null && gvp.longitude!.isNotEmpty);
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      clipBehavior: Clip.antiAlias,
+      elevation: 3,
+      child: InkWell(
+        onTap: onView,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header — name + project badge
+            Container(
+              decoration: BoxDecoration(
+                border: Border(left: BorderSide(color: primary, width: 4)),
+              ),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: primary.withAlpha(25),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.delete_sweep_outlined,
+                        size: 18, color: primary),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      gvp.name.isEmpty ? '—' : gvp.name,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (gvp.project.isNotEmpty)
+                        _Badge(label: gvp.project, color: primary),
+                      if (gvp.project.isNotEmpty) const SizedBox(height: 4),
+                      _Badge(
+                        label: gvp.active ? 'ACTIVE' : 'INACTIVE',
+                        color: gvp.active
+                            ? Colors.green
+                            : Theme.of(context).colorScheme.error,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Divider(height: 1, color: Colors.white.withAlpha(12)),
+
+            // Info — zone / ward / location
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _InfoChip(
+                          icon: Icons.location_city_outlined,
+                          label: 'Zone',
+                          value: zoneName ?? gvp.zone?.toString() ?? '—',
+                        ),
+                      ),
+                      Expanded(
+                        child: _InfoChip(
+                          icon: Icons.map_outlined,
+                          label: 'Ward',
+                          value: wardName ?? gvp.ward?.toString() ?? '—',
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  _InfoChip(
+                    icon: Icons.my_location_outlined,
+                    label: 'Location',
+                    value: _hasLocation
+                        ? '${gvp.latitude}, ${gvp.longitude}'
+                        : 'Not set',
+                    muted: !_hasLocation,
+                  ),
+                ],
+              ),
+            ),
+
+            // Actions
+            if (onView != null || onEdit != null || onImages != null) ...[
+              Divider(height: 1, color: Colors.white.withAlpha(12)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                child: Row(
+                  children: [
+                    if (onView != null)
+                      _ActionButton(
+                        icon: Icons.visibility_outlined,
+                        label: 'View',
+                        color: primary,
+                        onTap: onView!,
+                      ),
+                    if (onEdit != null)
+                      _ActionButton(
+                        icon: Icons.edit_outlined,
+                        label: 'Edit',
+                        color: onSurface.withAlpha(200),
+                        onTap: onEdit!,
+                      ),
+                    if (onImages != null)
+                      _ActionButton(
+                        icon: Icons.photo_library_outlined,
+                        label: 'Images',
+                        color: onSurface.withAlpha(200),
+                        onTap: onImages!,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Badge extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _Badge({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withAlpha(28),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withAlpha(110), width: 1),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool muted;
+
+  const _InfoChip({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.muted = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: onSurface.withAlpha(130)),
+        const SizedBox(width: 6),
+        Text(
+          '$label:',
+          style: TextStyle(fontSize: 12, color: onSurface.withAlpha(130)),
+        ),
+        const SizedBox(width: 5),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: muted ? onSurface.withAlpha(110) : onSurface,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: TextButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 17, color: color),
+        label: Text(
+          label,
+          style: TextStyle(
+              fontSize: 12, color: color, fontWeight: FontWeight.w600),
+          overflow: TextOverflow.ellipsis,
+        ),
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+        ),
+      ),
+    );
+  }
+}
