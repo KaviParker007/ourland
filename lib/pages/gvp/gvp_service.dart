@@ -85,8 +85,6 @@ class GvpService {
     final code = resp.statusCode;
     Map<String, dynamic>? body;
     try {
-      print('response__check');
-      print(resp.body);
       if (resp.body.isNotEmpty) {
         final decoded = jsonDecode(resp.body);
         if (decoded is Map<String, dynamic>) body = decoded;
@@ -161,14 +159,14 @@ class GvpService {
   }) async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_gvp_list').replace(
+      final uri = Uri.parse('$_baseUrl/drf_gvp_list/').replace(
         queryParameters: _clean({
           'zone': zone,
           'ward': ward,
           'project': project,
         }),
       );
-      final resp = await http.get(uri, headers: headers).timeout(_timeout);
+      final resp = await _send('GET', uri, headers: headers);
       if (resp.statusCode != 200) throw _fromResponse(resp);
       final data = _decode(resp);
       final list = data is List ? data : (data['results'] ?? data['data'] ?? []);
@@ -186,8 +184,8 @@ class GvpService {
   Future<GvpCreateOptions> getGvpCreateOptions() async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_gvp_create');
-      final resp = await http.get(uri, headers: headers).timeout(_timeout);
+      final uri = Uri.parse('$_baseUrl/drf_gvp_create/');
+      final resp = await _send('GET', uri, headers: headers);
       if (resp.statusCode != 200) throw _fromResponse(resp);
       final data = _decode(resp);
       return GvpCreateOptions.fromJson(Map<String, dynamic>.from(data as Map));
@@ -201,12 +199,9 @@ class GvpService {
   Future<void> createGvp(GvpCreateRequest payload) async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_gvp_create');
-      final resp = await http
-          .post(uri, headers: headers, body: jsonEncode(payload.toJson()))
-          .timeout(_timeout);
-      print('codeedd');
-      print(resp.statusCode);
+      final uri = Uri.parse('$_baseUrl/drf_gvp_create/');
+      final resp = await _send('POST', uri,
+          headers: headers, body: jsonEncode(payload.toJson()));
       if (resp.statusCode != 200 && resp.statusCode != 201) {
         throw _fromResponse(resp);
       }
@@ -220,10 +215,8 @@ class GvpService {
   Future<GvpDetail> getGvpDetails(int id) async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_gvp_detail/$id');
-      print('drf_gvp_detail_check');
-      print(uri);
-      final resp = await http.get(uri, headers: headers).timeout(_timeout);
+      final uri = Uri.parse('$_baseUrl/drf_gvp_detail/$id/');
+      final resp = await _send('GET', uri, headers: headers);
       if (resp.statusCode != 200) throw _fromResponse(resp);
       final data = _decode(resp);
       return GvpDetail.fromJson(Map<String, dynamic>.from(data as Map));
@@ -237,10 +230,9 @@ class GvpService {
   Future<GvpDetail> updateGvp(int id, Map<String, dynamic> changedFields) async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_gvp_update/$id');
-      final resp = await http
-          .patch(uri, headers: headers, body: jsonEncode(changedFields))
-          .timeout(_timeout);
+      final uri = Uri.parse('$_baseUrl/drf_gvp_update/$id/');
+      final resp = await _send('PATCH', uri,
+          headers: headers, body: jsonEncode(changedFields));
       if (resp.statusCode != 200) throw _fromResponse(resp);
       final data = _decode(resp);
       return GvpDetail.fromJson(Map<String, dynamic>.from(data as Map));
@@ -254,8 +246,8 @@ class GvpService {
   Future<List<GvpProjectCount>> getGvpCountByProject() async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_gvp_by_project');
-      final resp = await http.get(uri, headers: headers).timeout(_timeout);
+      final uri = Uri.parse('$_baseUrl/drf_gvp_by_project/');
+      final resp = await _send('GET', uri, headers: headers);
       if (resp.statusCode != 200) throw _fromResponse(resp);
       final data = _decode(resp);
       final map = Map<String, dynamic>.from(data as Map);
@@ -284,9 +276,9 @@ class GvpService {
   Future<List<GvpZoneCount>> getGvpCountByZone({String? project}) async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_gvp_by_zone')
+      final uri = Uri.parse('$_baseUrl/drf_gvp_by_zone/')
           .replace(queryParameters: _clean({'project': project}));
-      final resp = await http.get(uri, headers: headers).timeout(_timeout);
+      final resp = await _send('GET', uri, headers: headers);
       if (resp.statusCode != 200) throw _fromResponse(resp);
       final data = _decode(resp);
       return (data as List)
@@ -303,33 +295,9 @@ class GvpService {
   Future<List<GvpWardCount>> getGvpCountByWard({int? zoneId}) async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_gvp_by_ward')
+      final uri = Uri.parse('$_baseUrl/drf_gvp_by_ward/')
           .replace(queryParameters: _clean({'zone': zoneId?.toString()}));
-
-      // ── Debug: log the outgoing Ward API request (fired on zone select) ──
-      _logWardApi(
-        title: 'WARD API — REQUEST',
-        lines: [
-          'Method       : GET',
-          'Zone (param) : ${zoneId ?? '(none)'}',
-          'URL          : $uri',
-          'Headers      : ${_maskHeaders(headers)}',
-          'Request Body : None (GET request has no body)',
-        ],
-      );
-
-      final resp = await http.get(uri, headers: headers).timeout(_timeout);
-
-      // ── Debug: log the Ward API response ──
-      _logWardApi(
-        title: 'WARD API — RESPONSE',
-        lines: [
-          'URL          : $uri',
-          'Status Code  : ${resp.statusCode}',
-          'Response Body: ${resp.body.isEmpty ? '(empty)' : resp.body}',
-        ],
-      );
-
+      final resp = await _send('GET', uri, headers: headers);
       if (resp.statusCode != 200) throw _fromResponse(resp);
       final data = _decode(resp);
       return (data as List)
@@ -341,11 +309,13 @@ class GvpService {
     }
   }
 
-  // ── Ward API debug logging helpers ────────────────────────────────────────────
-  // Clear, boxed console output for verifying the Ward API integration. The
-  // Authorization credential is masked so logs never leak the Basic-auth token.
+  // ── API debug logging ─────────────────────────────────────────────────────────
+  // Every GVP request goes through _send / _sendMultipart, which log a boxed
+  // REQUEST (method, full URL, headers, body) and RESPONSE (method, URL, status
+  // code, body) block. The Authorization credential is always masked so logs
+  // never leak the Basic-auth token. Logging never alters the returned response.
 
-  void _logWardApi({required String title, required List<String> lines}) {
+  void _logApi({required String title, required List<String> lines}) {
     final buffer = StringBuffer()
       ..writeln('\n╔══════════════════════════════════════════════════════════')
       ..writeln('║ $title')
@@ -367,6 +337,75 @@ class GvpService {
     return masked;
   }
 
+  /// Sends a GET/POST/PATCH/DELETE request with consistent request/response
+  /// logging, returning the raw [http.Response] for the caller to handle.
+  Future<http.Response> _send(
+    String method,
+    Uri uri, {
+    required Map<String, String> headers,
+    Object? body,
+  }) async {
+    _logApi(title: 'GVP API — REQUEST', lines: [
+      'Method       : $method',
+      'URL          : $uri',
+      'Headers      : ${_maskHeaders(headers)}',
+      'Request Body : ${body ?? 'None'}',
+    ]);
+
+    final http.Response resp;
+    switch (method) {
+      case 'GET':
+        resp = await http.get(uri, headers: headers).timeout(_timeout);
+        break;
+      case 'POST':
+        resp =
+            await http.post(uri, headers: headers, body: body).timeout(_timeout);
+        break;
+      case 'PATCH':
+        resp = await http
+            .patch(uri, headers: headers, body: body)
+            .timeout(_timeout);
+        break;
+      case 'DELETE':
+        resp = await http.delete(uri, headers: headers).timeout(_timeout);
+        break;
+      default:
+        throw GvpApiException('Unsupported HTTP method: $method');
+    }
+
+    _logApi(title: 'GVP API — RESPONSE', lines: [
+      'Method       : $method',
+      'URL          : $uri',
+      'Status Code  : ${resp.statusCode}',
+      'Response Body: ${resp.body.isEmpty ? '(empty)' : resp.body}',
+    ]);
+    return resp;
+  }
+
+  /// Sends a multipart request (image uploads) with the same logging shape,
+  /// listing the text fields and attached file field names/sizes.
+  Future<http.Response> _sendMultipart(http.MultipartRequest request) async {
+    _logApi(title: 'GVP API — REQUEST', lines: [
+      'Method       : ${request.method}',
+      'URL          : ${request.url}',
+      'Headers      : ${_maskHeaders(request.headers)}',
+      'Request Body : (multipart/form-data)',
+      'Fields       : ${request.fields}',
+      'Files        : ${request.files.map((f) => '${f.field}="${f.filename}" (${f.length} bytes)').toList()}',
+    ]);
+
+    final streamed = await request.send().timeout(_timeout);
+    final resp = await http.Response.fromStream(streamed);
+
+    _logApi(title: 'GVP API — RESPONSE', lines: [
+      'Method       : ${request.method}',
+      'URL          : ${request.url}',
+      'Status Code  : ${resp.statusCode}',
+      'Response Body: ${resp.body.isEmpty ? '(empty)' : resp.body}',
+    ]);
+    return resp;
+  }
+
   // ── 9. Queried GVP list (final drill-down) ───────────────────────────────────
   // Send ONLY the most specific selected filter (ward_id > zone_id > project).
 
@@ -385,9 +424,9 @@ class GvpService {
     }
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_list_queried_gvp')
+      final uri = Uri.parse('$_baseUrl/drf_list_queried_gvp/')
           .replace(queryParameters: params);
-      final resp = await http.get(uri, headers: headers).timeout(_timeout);
+      final resp = await _send('GET', uri, headers: headers);
       if (resp.statusCode != 200) throw _fromResponse(resp);
       final data = _decode(resp);
       final list = data is List ? data : (data['results'] ?? data['data'] ?? []);
@@ -411,7 +450,7 @@ class GvpService {
     try {
       // Never manually set the multipart boundary — MultipartRequest does it.
       final headers = await _authHeaders(json: false);
-      final uri = Uri.parse('$_baseUrl/drf_gvp_add_reference_image/$gvpId');
+      final uri = Uri.parse('$_baseUrl/drf_gvp_add_reference_image/$gvpId/');
       final request = http.MultipartRequest('POST', uri)
         ..headers.addAll(headers);
 
@@ -425,8 +464,7 @@ class GvpService {
         request.fields['caption'] = trimmedCaption;
       }
 
-      final streamed = await request.send().timeout(_timeout);
-      final resp = await http.Response.fromStream(streamed);
+      final resp = await _sendMultipart(request);
       if (resp.statusCode != 200 && resp.statusCode != 201) {
         throw _fromResponse(resp);
       }
@@ -435,14 +473,104 @@ class GvpService {
     }
   }
 
-  // ── 11. Delete reference image (204, no body) ────────────────────────────────
+  // ── 12. Create daily confirmation — "Before" (multipart POST) ─────────────────
+  // Called only when today_status == "NT". Camera capture only — the caller is
+  // responsible for passing a fresh camera image (gallery is not permitted).
+  // The backend sets before_image_by/on, confirmed_date and moves the GVP to WIP.
+
+  Future<DailyConfirmation> createDailyConfirmation({
+    required int gvpId,
+    required File beforeImage,
+    double? latitude,
+    double? longitude,
+    String? remark,
+  }) async {
+    try {
+      final headers = await _authHeaders(json: false);
+      final uri = Uri.parse('$_baseUrl/drf_daily_confirmation_create/');
+      if (!await beforeImage.exists()) {
+        throw GvpApiException('The captured image could not be found.');
+      }
+      final request = http.MultipartRequest('POST', uri)
+        ..headers.addAll(headers)
+        ..fields['gvp'] = gvpId.toString();
+      request.files.add(
+          await http.MultipartFile.fromPath('before_image', beforeImage.path));
+      if (latitude != null) {
+        request.fields['before_image_latitude'] = latitude.toString();
+      }
+      if (longitude != null) {
+        request.fields['before_image_longitude'] = longitude.toString();
+      }
+      final trimmed = remark?.trim();
+      if (trimmed != null && trimmed.isNotEmpty) {
+        request.fields['before_image_remark'] = trimmed;
+      }
+
+      final resp = await _sendMultipart(request);
+      if (resp.statusCode != 200 && resp.statusCode != 201) {
+        throw _fromResponse(resp);
+      }
+      final data = _decode(resp);
+      return DailyConfirmation.fromJson(Map<String, dynamic>.from(data as Map));
+    } catch (e) {
+      _mapError(e);
+    }
+  }
+
+  // ── 13. Close daily confirmation — "After" (multipart PATCH) ──────────────────
+  // Called only when today_status == "WIP". [confirmationId] is the
+  // GVPDailyConfirmation id (NOT the GVP id). The backend sets after_image_by/on,
+  // last_cleaned and moves the GVP to C (cleared).
+
+  Future<DailyConfirmation> closeDailyConfirmation({
+    required int confirmationId,
+    required File afterImage,
+    double? latitude,
+    double? longitude,
+    String? remark,
+  }) async {
+    try {
+      final headers = await _authHeaders(json: false);
+      final uri =
+          Uri.parse('$_baseUrl/drf_daily_confirmation_close/$confirmationId/');
+      if (!await afterImage.exists()) {
+        throw GvpApiException('The captured image could not be found.');
+      }
+      final request = http.MultipartRequest('PATCH', uri)
+        ..headers.addAll(headers);
+      request.files.add(
+          await http.MultipartFile.fromPath('after_image', afterImage.path));
+      if (latitude != null) {
+        request.fields['after_image_latitude'] = latitude.toString();
+      }
+      if (longitude != null) {
+        request.fields['after_image_longitude'] = longitude.toString();
+      }
+      final trimmed = remark?.trim();
+      if (trimmed != null && trimmed.isNotEmpty) {
+        request.fields['after_image_remark'] = trimmed;
+      }
+
+      final resp = await _sendMultipart(request);
+      if (resp.statusCode != 200) {
+        throw _fromResponse(resp);
+      }
+      final data = _decode(resp);
+      return DailyConfirmation.fromJson(Map<String, dynamic>.from(data as Map));
+    } catch (e) {
+      _mapError(e);
+    }
+  }
+
+  // ── 14. Delete reference image (204, no body) ────────────────────────────────
 
   Future<void> deleteReferenceImage(int imageId) async {
     try {
       final headers = await _authHeaders();
       final uri =
-          Uri.parse('$_baseUrl/drf_gvp_delete_reference_image/$imageId');
-      final resp = await http.delete(uri, headers: headers).timeout(_timeout);
+          Uri.parse('$_baseUrl/drf_gvp_delete_reference_image/$imageId/');
+      final resp = await _send('DELETE', uri, headers: headers);
       // 204 No Content is success — do NOT try to parse a JSON body.
       if (resp.statusCode == 204 || resp.statusCode == 200) return;
       throw _fromResponse(resp);

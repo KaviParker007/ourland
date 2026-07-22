@@ -44,6 +44,53 @@ bool? _asBoolOrNull(Object? v) {
   return null;
 }
 
+// ─── Daily cleaning status ─────────────────────────────────────────────────────
+//
+// The backend reports a GVP's cleaning progress for the current day via a
+// `today_status` field with three values:
+//   • NT  — Not Taken up (no confirmation yet)          → swipe reveals "Before"
+//   • WIP — Work In Progress (before image captured)    → swipe reveals "After"
+//   • C   — Cleared (after image captured, locked)      → no swipe
+
+enum GvpTodayStatus {
+  nt,
+  wip,
+  cleared,
+  unknown;
+
+  /// Parses the raw `today_status` string defensively (case/space insensitive).
+  static GvpTodayStatus fromRaw(Object? raw) {
+    final s = _asStringOrNull(raw)?.toUpperCase();
+    switch (s) {
+      case 'NT':
+        return GvpTodayStatus.nt;
+      case 'WIP':
+        return GvpTodayStatus.wip;
+      case 'C':
+        return GvpTodayStatus.cleared;
+      default:
+        return GvpTodayStatus.unknown;
+    }
+  }
+
+  /// The canonical code the backend uses, or null when unknown.
+  String? get code {
+    switch (this) {
+      case GvpTodayStatus.nt:
+        return 'NT';
+      case GvpTodayStatus.wip:
+        return 'WIP';
+      case GvpTodayStatus.cleared:
+        return 'C';
+      case GvpTodayStatus.unknown:
+        return null;
+    }
+  }
+
+  bool get isSwipeable =>
+      this == GvpTodayStatus.nt || this == GvpTodayStatus.wip;
+}
+
 // ─── GVP (list row) ───────────────────────────────────────────────────────────
 
 class Gvp {
@@ -56,6 +103,16 @@ class Gvp {
   final String? longitude;
   final bool active;
 
+  /// Cleaning status for the current day, driving both the card colour and the
+  /// available swipe action.
+  final GvpTodayStatus todayStatus;
+
+  /// The open GVPDailyConfirmation record id for today (`gvp_open_dc`), present
+  /// once a "Before" image has been captured (status WIP). This is the pk passed
+  /// to the close (After) endpoint — note it is the confirmation id, **not** the
+  /// GVP id.
+  final int? gvpOpenDc;
+
   const Gvp({
     required this.id,
     required this.name,
@@ -65,6 +122,8 @@ class Gvp {
     this.latitude,
     this.longitude,
     this.active = true,
+    this.todayStatus = GvpTodayStatus.unknown,
+    this.gvpOpenDc,
   });
 
   factory Gvp.fromJson(Map<String, dynamic> json) {
@@ -79,6 +138,35 @@ class Gvp {
       // The list endpoint only returns active records; default to true when
       // the flag is absent.
       active: _asBoolOrNull(json['active'] ?? json['is_active']) ?? true,
+      todayStatus: GvpTodayStatus.fromRaw(json['today_status']),
+      // `drf_list_queried_gvp` returns the open daily-confirmation pk here.
+      gvpOpenDc: _asIntOrNull(json['gvp_open_dc']),
+    );
+  }
+}
+
+// ─── Daily confirmation (create / close response) ──────────────────────────────
+
+class DailyConfirmation {
+  final int id;
+  final int? gvp;
+  final GvpTodayStatus todayStatus;
+  final bool isCleared;
+
+  const DailyConfirmation({
+    required this.id,
+    this.gvp,
+    this.todayStatus = GvpTodayStatus.unknown,
+    this.isCleared = false,
+  });
+
+  factory DailyConfirmation.fromJson(Map<String, dynamic> json) {
+    return DailyConfirmation(
+      id: _asIntOrNull(json['id']) ?? 0,
+      gvp: _asIntOrNull(json['gvp']),
+      todayStatus: GvpTodayStatus.fromRaw(
+          json['today_status'] ?? json['gvp_today_status']),
+      isCleared: _asBoolOrNull(json['is_cleared']) ?? false,
     );
   }
 }

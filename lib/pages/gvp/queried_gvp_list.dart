@@ -10,7 +10,7 @@ import 'package:flutter/material.dart';
 import 'gvp_models.dart';
 import 'gvp_service.dart';
 import 'gvp_ui.dart';
-import 'gvp_card.dart';
+import 'gvp_daily_confirmation.dart';
 import 'gvp_detail.dart';
 import 'gvp_name_resolver.dart';
 
@@ -145,10 +145,11 @@ class _QueriedGvpListPageState extends State<QueriedGvpListPage> {
         itemBuilder: (context, index) {
           if (index == 0) return _ResultBanner(count: _gvps.length);
           final gvp = _gvps[index - 1];
-          return GvpCard(
+          return GvpDailyCard(
             gvp: gvp,
             zoneName: _resolver.zoneName(gvp.zone),
             wardName: _resolver.wardName(gvp.ward),
+            onChanged: _fetch,
             onView: () => _openDetail(gvp),
           );
         },

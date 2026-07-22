@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import 'gvp_models.dart';
+import 'gvp_status.dart';
 
 class GvpCard extends StatelessWidget {
   final Gvp gvp;
@@ -16,6 +17,10 @@ class GvpCard extends StatelessWidget {
   final String? zoneName;
   final String? wardName;
 
+  /// When true, the daily cleaning status pill is shown in the header. Set on
+  /// the Dashboard / GVP List where today_status drives colour + swipe.
+  final bool showStatus;
+
   const GvpCard({
     super.key,
     required this.gvp,
@@ -24,7 +29,11 @@ class GvpCard extends StatelessWidget {
     this.onImages,
     this.zoneName,
     this.wardName,
+    this.showStatus = false,
   });
+
+  bool get _showStatus =>
+      showStatus && gvp.todayStatus != GvpTodayStatus.unknown;
 
   bool get _hasLocation =>
       (gvp.latitude != null && gvp.latitude!.isNotEmpty) &&
@@ -34,10 +43,25 @@ class GvpCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
     final onSurface = Theme.of(context).colorScheme.onSurface;
+    final surface = Theme.of(context).colorScheme.surface;
+    // When status is shown, the whole card adopts the cleaning-state colour
+    // (NT grey / WIP amber / C green): a tinted surface, a coloured border and
+    // a stronger header band, so each state is distinct at a glance.
+    final accent =
+        _showStatus ? GvpStatusStyle.of(gvp.todayStatus).color : primary;
+    final cardColor =
+        _showStatus ? Color.alphaBlend(accent.withAlpha(28), surface) : null;
+    final headerBand = _showStatus ? accent.withAlpha(40) : null;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      color: cardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: _showStatus
+            ? BorderSide(color: accent.withAlpha(150), width: 1.4)
+            : BorderSide.none,
+      ),
       clipBehavior: Clip.antiAlias,
       elevation: 3,
       child: InkWell(
@@ -48,7 +72,8 @@ class GvpCard extends StatelessWidget {
             // Header — name + project badge
             Container(
               decoration: BoxDecoration(
-                border: Border(left: BorderSide(color: primary, width: 4)),
+                color: headerBand,
+                border: Border(left: BorderSide(color: accent, width: 4)),
               ),
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
               child: Row(
@@ -58,23 +83,33 @@ class GvpCard extends StatelessWidget {
                     width: 34,
                     height: 34,
                     decoration: BoxDecoration(
-                      color: primary.withAlpha(25),
+                      color: accent.withAlpha(25),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Icon(Icons.delete_sweep_outlined,
-                        size: 18, color: primary),
+                        size: 18, color: accent),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text(
-                      gvp.name.isEmpty ? '—' : gvp.name,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        letterSpacing: 0.3,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          gvp.name.isEmpty ? '—' : gvp.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                        if (_showStatus) ...[
+                          const SizedBox(height: 6),
+                          GvpStatusBadge(status: gvp.todayStatus),
+                        ],
+                      ],
                     ),
                   ),
+                  const SizedBox(width: 8),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
