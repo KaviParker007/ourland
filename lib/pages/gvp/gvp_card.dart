@@ -35,10 +35,6 @@ class GvpCard extends StatelessWidget {
   bool get _showStatus =>
       showStatus && gvp.todayStatus != GvpTodayStatus.unknown;
 
-  bool get _hasLocation =>
-      (gvp.latitude != null && gvp.latitude!.isNotEmpty) &&
-      (gvp.longitude != null && gvp.longitude!.isNotEmpty);
-
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
@@ -129,37 +125,24 @@ class GvpCard extends StatelessWidget {
             ),
             Divider(height: 1, color: Colors.white.withAlpha(12)),
 
-            // Info — zone / ward / location
+            // Info — zone / ward
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-              child: Column(
+              child: Row(
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _InfoChip(
-                          icon: Icons.location_city_outlined,
-                          label: 'Zone',
-                          value: zoneName ?? gvp.zone?.toString() ?? '—',
-                        ),
-                      ),
-                      Expanded(
-                        child: _InfoChip(
-                          icon: Icons.map_outlined,
-                          label: 'Ward',
-                          value: wardName ?? gvp.ward?.toString() ?? '—',
-                        ),
-                      ),
-                    ],
+                  Expanded(
+                    child: _InfoChip(
+                      icon: Icons.location_city_outlined,
+                      label: 'Zone',
+                      value: zoneName ?? gvp.zone?.toString() ?? '—',
+                    ),
                   ),
-                  const SizedBox(height: 6),
-                  _InfoChip(
-                    icon: Icons.my_location_outlined,
-                    label: 'Location',
-                    value: _hasLocation
-                        ? '${gvp.latitude}, ${gvp.longitude}'
-                        : 'Not set',
-                    muted: !_hasLocation,
+                  Expanded(
+                    child: _InfoChip(
+                      icon: Icons.map_outlined,
+                      label: 'Ward',
+                      value: wardName ?? gvp.ward?.toString() ?? '—',
+                    ),
                   ),
                 ],
               ),
