@@ -62,7 +62,7 @@ enum GvpTodayStatus {
   static GvpTodayStatus fromRaw(Object? raw) {
     final s = _asStringOrNull(raw)?.toUpperCase();
     switch (s) {
-      case 'NT':
+      case 'NC':
         return GvpTodayStatus.nt;
       case 'WIP':
         return GvpTodayStatus.wip;
@@ -77,7 +77,7 @@ enum GvpTodayStatus {
   String? get code {
     switch (this) {
       case GvpTodayStatus.nt:
-        return 'NT';
+        return 'NC';
       case GvpTodayStatus.wip:
         return 'WIP';
       case GvpTodayStatus.cleared:
@@ -399,31 +399,71 @@ class GvpCreateOptions {
   }
 }
 
-// ─── Drill-down count models ──────────────────────────────────────────────────
+// ─── Drill-down status counts ─────────────────────────────────────────────────
+//
+// The dashboard count endpoints (by project / zone / ward) now return status-wise
+// counts instead of a single `count`:
+//   • NC  — Not Cleaned      (maps to the grey "NT" card state)
+//   • WIP — Work In Progress
+//   • C   — Cleared / Closed
+// Parsing is defensive (upper/lower case, and NT as an alias for NC) so a minor
+// backend key change never breaks the dashboard.
+
+class GvpStatusCounts {
+  final int nc;
+  final int wip;
+  final int c;
+
+  const GvpStatusCounts({this.nc = 0, this.wip = 0, this.c = 0});
+
+  /// Grand total across all three states.
+  int get total => nc + wip + c;
+
+  bool get isEmpty => total == 0;
+
+  factory GvpStatusCounts.fromJson(Map<String, dynamic> json) {
+    return GvpStatusCounts(
+      nc: _asIntOrNull(json['NC'] ?? json['nc'] ?? json['NT'] ?? json['nt']) ?? 0,
+      wip: _asIntOrNull(json['WIP'] ?? json['wip']) ?? 0,
+      c: _asIntOrNull(json['C'] ?? json['c']) ?? 0,
+    );
+  }
+}
 
 class GvpProjectCount {
   final String project;
-  final int count;
+  final GvpStatusCounts counts;
 
-  const GvpProjectCount({required this.project, required this.count});
+  const GvpProjectCount({required this.project, required this.counts});
+
+  int get total => counts.total;
+
+  factory GvpProjectCount.fromJson(Map<String, dynamic> json) {
+    return GvpProjectCount(
+      project: _asStringOrNull(json['project']) ?? '',
+      counts: GvpStatusCounts.fromJson(json),
+    );
+  }
 }
 
 class GvpZoneCount {
   final int zoneId;
   final String zoneCode;
-  final int count;
+  final GvpStatusCounts counts;
 
   const GvpZoneCount({
     required this.zoneId,
     required this.zoneCode,
-    required this.count,
+    required this.counts,
   });
+
+  int get total => counts.total;
 
   factory GvpZoneCount.fromJson(Map<String, dynamic> json) {
     return GvpZoneCount(
       zoneId: _asIntOrNull(json['zone_id']) ?? 0,
       zoneCode: _asStringOrNull(json['zone_code']) ?? '—',
-      count: _asIntOrNull(json['count']) ?? 0,
+      counts: GvpStatusCounts.fromJson(json),
     );
   }
 }
@@ -431,19 +471,21 @@ class GvpZoneCount {
 class GvpWardCount {
   final int wardId;
   final String wardCode;
-  final int count;
+  final GvpStatusCounts counts;
 
   const GvpWardCount({
     required this.wardId,
     required this.wardCode,
-    required this.count,
+    required this.counts,
   });
+
+  int get total => counts.total;
 
   factory GvpWardCount.fromJson(Map<String, dynamic> json) {
     return GvpWardCount(
       wardId: _asIntOrNull(json['ward_id']) ?? 0,
       wardCode: _asStringOrNull(json['ward_code']) ?? '—',
-      count: _asIntOrNull(json['count']) ?? 0,
+      counts: GvpStatusCounts.fromJson(json),
     );
   }
 }

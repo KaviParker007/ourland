@@ -14,6 +14,7 @@ import 'package:ourlandnew/pages/notifications/notification_bell.dart';
 import 'gvp_models.dart';
 import 'gvp_service.dart';
 import 'gvp_ui.dart';
+import 'gvp_status.dart';
 import 'gvp_form.dart';
 import 'queried_gvp_list.dart';
 import 'gvp_name_resolver.dart';
@@ -209,7 +210,7 @@ class _GvpDashboardPageState extends State<GvpDashboardPage> {
           final isExp = _expandedProject == row.project;
           return _ProjectCard(
             label: row.project,
-            count: row.count,
+            counts: row.counts,
             isExpanded: isExp,
             onToggle: () => _toggleProject(row.project),
             onTotalTap: () => _openQueried(
@@ -234,7 +235,7 @@ class _GvpDashboardPageState extends State<GvpDashboardPage> {
         final isExp = _expandedZoneId == row.zoneId;
         return _ZoneRow(
           label: row.zoneCode,
-          count: row.count,
+          counts: row.counts,
           isExpanded: isExp,
           onToggle: () => _toggleZone(row.zoneId),
           onTotalTap: () => _openQueried(
@@ -263,7 +264,7 @@ class _GvpDashboardPageState extends State<GvpDashboardPage> {
       children: _wards.map((row) {
         return _WardRow(
           label: row.wardCode,
-          count: row.count,
+          counts: row.counts,
           onTotalTap: () => _openQueried(
             GvpDrillContext(
               project: project,
@@ -283,7 +284,7 @@ class _GvpDashboardPageState extends State<GvpDashboardPage> {
 
 class _ProjectCard extends StatelessWidget {
   final String label;
-  final int count;
+  final GvpStatusCounts counts;
   final bool isExpanded;
   final VoidCallback onToggle;
   final VoidCallback onTotalTap;
@@ -291,7 +292,7 @@ class _ProjectCard extends StatelessWidget {
 
   const _ProjectCard({
     required this.label,
-    required this.count,
+    required this.counts,
     required this.isExpanded,
     required this.onToggle,
     required this.onTotalTap,
@@ -315,52 +316,60 @@ class _ProjectCard extends StatelessWidget {
               decoration: BoxDecoration(
                 border: Border(left: BorderSide(color: primary, width: 4)),
               ),
-              padding: const EdgeInsets.fromLTRB(12, 14, 8, 14),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: primary.withAlpha(25),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(Icons.delete_sweep_outlined,
-                        size: 18, color: primary),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        letterSpacing: 0.4,
+                  Row(
+                    children: [
+                      Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: primary.withAlpha(25),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(Icons.delete_sweep_outlined,
+                            size: 18, color: primary),
                       ),
-                    ),
-                  ),
-                  GvpCountBadge(
-                      count: count, color: primary, onTap: onTotalTap),
-                  const SizedBox(width: 2),
-                  Semantics(
-                    label: isExpanded ? 'Collapse $label' : 'Expand $label',
-                    button: true,
-                    excludeSemantics: true,
-                    child: IconButton(
-                      onPressed: onToggle,
-                      tooltip:
-                          isExpanded ? 'Collapse $label' : 'Expand $label',
-                      padding: EdgeInsets.zero,
-                      constraints:
-                          const BoxConstraints(minWidth: 36, minHeight: 36),
-                      icon: AnimatedRotation(
-                        turns: isExpanded ? 0.5 : 0.0,
-                        duration: const Duration(milliseconds: 250),
-                        child: Icon(Icons.keyboard_arrow_down,
-                            color: primary, size: 24),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          label,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
                       ),
-                    ),
+                      GvpCountBadge(
+                          count: counts.total, color: primary, onTap: onTotalTap),
+                      const SizedBox(width: 2),
+                      Semantics(
+                        label:
+                            isExpanded ? 'Collapse $label' : 'Expand $label',
+                        button: true,
+                        excludeSemantics: true,
+                        child: IconButton(
+                          onPressed: onToggle,
+                          tooltip:
+                              isExpanded ? 'Collapse $label' : 'Expand $label',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 36, minHeight: 36),
+                          icon: AnimatedRotation(
+                            turns: isExpanded ? 0.5 : 0.0,
+                            duration: const Duration(milliseconds: 250),
+                            child: Icon(Icons.keyboard_arrow_down,
+                                color: primary, size: 24),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 10),
+                  GvpStatusCountsBar(counts: counts),
                 ],
               ),
             ),
@@ -390,7 +399,7 @@ class _ProjectCard extends StatelessWidget {
 
 class _ZoneRow extends StatelessWidget {
   final String label;
-  final int count;
+  final GvpStatusCounts counts;
   final bool isExpanded;
   final VoidCallback onToggle;
   final VoidCallback onTotalTap;
@@ -398,7 +407,7 @@ class _ZoneRow extends StatelessWidget {
 
   const _ZoneRow({
     required this.label,
-    required this.count,
+    required this.counts,
     required this.isExpanded,
     required this.onToggle,
     required this.onTotalTap,
@@ -428,12 +437,19 @@ class _ZoneRow extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  child: Text(
-                    label,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13.5,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      GvpStatusCountsBar(counts: counts, compact: true),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -449,7 +465,7 @@ class _ZoneRow extends StatelessWidget {
                           color: _accent.withAlpha(100), width: 1.1),
                     ),
                     child: Text(
-                      '$count',
+                      '${counts.total}',
                       style: const TextStyle(
                         color: _accent,
                         fontWeight: FontWeight.bold,
@@ -504,12 +520,12 @@ class _ZoneRow extends StatelessWidget {
 
 class _WardRow extends StatelessWidget {
   final String label;
-  final int count;
+  final GvpStatusCounts counts;
   final VoidCallback onTotalTap;
 
   const _WardRow({
     required this.label,
-    required this.count,
+    required this.counts,
     required this.onTotalTap,
   });
 
@@ -533,13 +549,20 @@ class _WardRow extends StatelessWidget {
               ),
             ),
             Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: onSurface.withAlpha(210),
-                ),
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: onSurface.withAlpha(210),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 6),
+                  GvpStatusCountsBar(counts: counts, compact: true),
+                ],
               ),
             ),
             const SizedBox(width: 6),
@@ -552,7 +575,7 @@ class _WardRow extends StatelessWidget {
                 border: Border.all(color: primary.withAlpha(70), width: 0.8),
               ),
               child: Text(
-                '$count',
+                '${counts.total}',
                 style: TextStyle(
                   fontSize: 11,
                   color: primary,

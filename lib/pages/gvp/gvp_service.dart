@@ -250,15 +250,14 @@ class GvpService {
       final resp = await _send('GET', uri, headers: headers);
       if (resp.statusCode != 200) throw _fromResponse(resp);
       final data = _decode(resp);
-      final map = Map<String, dynamic>.from(data as Map);
-      final list = map.entries
-          .map((e) => GvpProjectCount(
-                project: e.key,
-                count: (e.value is num)
-                    ? (e.value as num).toInt()
-                    : int.tryParse(e.value.toString()) ?? 0,
-              ))
-          .toList();
+      // New format: an array of { project, NC, WIP, C } objects.
+      final list = (data is List)
+          ? data
+              .whereType<Map>()
+              .map((e) => GvpProjectCount.fromJson(Map<String, dynamic>.from(e)))
+              .where((p) => p.project.isNotEmpty)
+              .toList()
+          : <GvpProjectCount>[];
       // Preserve a stable order following the canonical project list.
       list.sort((a, b) {
         final ia = kGvpProjects.indexOf(a.project);
