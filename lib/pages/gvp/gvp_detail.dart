@@ -190,30 +190,6 @@ class _GvpDetailPageState extends State<GvpDetailPage> {
             ),
           ),
 
-          // ── Location Information ──
-          _Section(
-            icon: Icons.my_location_rounded,
-            title: 'Location Information',
-            child: Column(
-              children: [
-                _DetailRow(
-                  label: 'Latitude',
-                  value: (detail.latitude?.isNotEmpty ?? false)
-                      ? detail.latitude!
-                      : 'Not set',
-                  muted: !(detail.latitude?.isNotEmpty ?? false),
-                ),
-                _DetailRow(
-                  label: 'Longitude',
-                  value: (detail.longitude?.isNotEmpty ?? false)
-                      ? detail.longitude!
-                      : 'Not set',
-                  muted: !(detail.longitude?.isNotEmpty ?? false),
-                ),
-              ],
-            ),
-          ),
-
           // ── Record Information ──
           _Section(
             icon: Icons.badge_outlined,

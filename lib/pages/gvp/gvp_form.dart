@@ -11,7 +11,7 @@
 // the changed-field map built here).
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 
 import 'gvp_models.dart';
 import 'gvp_service.dart';
@@ -32,21 +32,23 @@ class GvpFormPage extends StatefulWidget {
 class _GvpFormPageState extends State<GvpFormPage> {
   final _service = GvpService.instance;
 
-  // Options
-  bool _optionsLoading = true;
-  String? _optionsError;
+  // Project options (loaded once on init)
+  bool _projectsLoading = true;
+  String? _projectsError;
   List<GvpChoice> _projectItems = [];
+
+  // Zone options (depend on the selected project)
+  bool _zonesLoading = false;
+  String? _zonesError;
   List<GvpZoneChoice> _zoneItems = [];
 
-  // Ward loading (per selected zone)
-  List<GvpWardChoice> _wardItems = [];
+  // Ward options (depend on the selected zone)
   bool _wardLoading = false;
   String? _wardError;
+  List<GvpWardChoice> _wardItems = [];
 
   // Field controllers / selections
   final _nameController = TextEditingController();
-  final _latController = TextEditingController();
-  final _longController = TextEditingController();
   String? _project;
   int? _zoneId;
   int? _wardId;
@@ -56,8 +58,6 @@ class _GvpFormPageState extends State<GvpFormPage> {
   late String _initProject;
   int? _initZoneId;
   int? _initWardId;
-  late String _initLat;
-  late String _initLong;
 
   bool _submitting = false;
 
@@ -68,14 +68,12 @@ class _GvpFormPageState extends State<GvpFormPage> {
   void initState() {
     super.initState();
     _seedInitialValues();
-    _loadOptions();
+    _loadProjects();
   }
 
   @override
   void dispose() {
     _nameController.dispose();
-    _latController.dispose();
-    _longController.dispose();
     super.dispose();
   }
 
@@ -85,78 +83,82 @@ class _GvpFormPageState extends State<GvpFormPage> {
     _initProject = e?.project ?? '';
     _initZoneId = e?.zone;
     _initWardId = e?.ward;
-    _initLat = e?.latitude ?? '';
-    _initLong = e?.longitude ?? '';
 
     _nameController.text = _initName;
-    _latController.text = _initLat;
-    _longController.text = _initLong;
     _project = _initProject.isEmpty ? null : _initProject;
     _zoneId = _initZoneId;
     _wardId = _initWardId;
   }
 
-  // ── Options loading ─────────────────────────────────────────────────────────
+  // ── Dependent option loading (Project → Zone → Ward) ─────────────────────────
 
-  Future<void> _loadOptions() async {
+  /// Loads the Project list. In edit mode it then preloads the dependent Zone
+  /// and Ward lists so the existing selections are shown.
+  Future<void> _loadProjects() async {
     setState(() {
-      _optionsLoading = true;
-      _optionsError = null;
+      _projectsLoading = true;
+      _projectsError = null;
     });
     try {
-      final opts = await _service.getGvpCreateOptions();
+      final projects = await _service.getProjectChoices();
       if (!mounted) return;
-
-      // Prefer backend project choices; fall back to the canonical constant so
-      // the dropdown is never empty.
-      final projects = opts.projectChoices.isNotEmpty
-          ? opts.projectChoices
-          : kGvpProjects
-              .map((p) => GvpChoice(value: p, label: p))
-              .toList();
-
       setState(() {
         _projectItems = projects;
-        _zoneItems = opts.zonalChoices;
-        _optionsLoading = false;
+        _ensureProjectInList();
+        _projectsLoading = false;
       });
-
-      // In edit mode, preload wards for the existing zone so the ward dropdown
-      // shows the current selection.
-      if (_zoneId != null) {
-        await _loadWards(_zoneId!, preserveSelection: true);
+      // Edit mode: hydrate the dependent chain for the pre-filled selection.
+      if (_project != null && _project!.isNotEmpty) {
+        await _loadZones(_project!, preserveSelection: true);
       }
     } on GvpApiException catch (e) {
       if (mounted) {
         setState(() {
-          _optionsError = e.message;
-          _optionsLoading = false;
+          _projectsError = e.message;
+          _projectsLoading = false;
         });
       }
     }
   }
 
-  Future<void> _loadWards(int zoneId, {bool preserveSelection = false}) async {
-    // Prefer wards embedded in the zone choice; otherwise use the documented
-    // by-ward endpoint to enumerate wards for the zone.
-    final embedded = _zoneItems
-        .firstWhere(
-          (z) => z.id == zoneId,
-          orElse: () => const GvpZoneChoice(id: -1, code: ''),
-        )
-        .wards;
-
-    if (embedded.isNotEmpty) {
-      setState(() {
-        _wardItems = embedded;
+  /// Loads the Zone list for [projectCode]. Stale responses (the user picked a
+  /// different project mid-flight) are discarded.
+  Future<void> _loadZones(String projectCode,
+      {bool preserveSelection = false}) async {
+    setState(() {
+      _zonesLoading = true;
+      _zonesError = null;
+      _zoneItems = [];
+      if (!preserveSelection) {
+        _zoneId = null;
+        _wardId = null;
+        _wardItems = [];
         _wardError = null;
-        _wardLoading = false;
-        if (!preserveSelection) _wardId = null;
-        _ensureWardInList();
+      }
+    });
+    try {
+      final zones = await _service.getProjectZoneChoices(projectCode);
+      if (!mounted || _project != projectCode) return;
+      setState(() {
+        _zoneItems = zones;
+        _ensureZoneInList();
+        _zonesLoading = false;
       });
-      return;
+      // Edit mode: continue hydrating wards for the pre-filled zone.
+      if (preserveSelection && _zoneId != null) {
+        await _loadWards(_zoneId!, preserveSelection: true);
+      }
+    } on GvpApiException catch (e) {
+      if (!mounted || _project != projectCode) return;
+      setState(() {
+        _zonesError = e.message;
+        _zonesLoading = false;
+      });
     }
+  }
 
+  /// Loads the Ward list for [zoneId]. Stale responses are discarded.
+  Future<void> _loadWards(int zoneId, {bool preserveSelection = false}) async {
     setState(() {
       _wardLoading = true;
       _wardError = null;
@@ -164,23 +166,41 @@ class _GvpFormPageState extends State<GvpFormPage> {
       if (!preserveSelection) _wardId = null;
     });
     try {
-      final counts = await _service.getGvpCountByWard(zoneId: zoneId);
-      if (!mounted) return;
+      final wards = await _service.getZonalWardChoices(zoneId);
+      if (!mounted || _zoneId != zoneId) return;
       setState(() {
-        _wardItems = counts
-            .map((c) => GvpWardChoice(id: c.wardId, code: c.wardCode))
-            .toList();
+        _wardItems = wards;
         _ensureWardInList();
+        _wardLoading = false;
       });
     } on GvpApiException catch (e) {
-      if (mounted) setState(() => _wardError = e.message);
-    } finally {
-      if (mounted) setState(() => _wardLoading = false);
+      if (!mounted || _zoneId != zoneId) return;
+      setState(() {
+        _wardError = e.message;
+        _wardLoading = false;
+      });
     }
   }
 
-  /// Keep an already-selected ward visible even if it isn't among the fetched
-  /// options (e.g. editing a GVP whose ward has no siblings listed).
+  /// Keep an already-selected project/zone/ward visible even if it isn't among
+  /// the fetched options (e.g. editing a record whose option list differs),
+  /// which also prevents a Dropdown "value not in items" assertion.
+  void _ensureProjectInList() {
+    final p = _project;
+    if (p != null && p.isNotEmpty && !_projectItems.any((c) => c.value == p)) {
+      _projectItems = [GvpChoice(value: p, label: p), ..._projectItems];
+    }
+  }
+
+  void _ensureZoneInList() {
+    if (_zoneId != null && !_zoneItems.any((z) => z.id == _zoneId)) {
+      _zoneItems = [
+        GvpZoneChoice(id: _zoneId!, code: 'Zone $_zoneId'),
+        ..._zoneItems,
+      ];
+    }
+  }
+
   void _ensureWardInList() {
     if (_wardId != null && !_wardItems.any((w) => w.id == _wardId)) {
       _wardItems = [
@@ -192,26 +212,8 @@ class _GvpFormPageState extends State<GvpFormPage> {
 
   // ── Validation ──────────────────────────────────────────────────────────────
 
-  String? _validateLatitude(String raw) {
-    final s = raw.trim();
-    if (s.isEmpty) return null; // optional
-    final v = double.tryParse(s);
-    if (v == null) return 'Enter a valid number.';
-    if (v < -90 || v > 90) return 'Latitude must be between -90 and 90.';
-    return null;
-  }
-
-  String? _validateLongitude(String raw) {
-    final s = raw.trim();
-    if (s.isEmpty) return null; // optional
-    final v = double.tryParse(s);
-    if (v == null) return 'Enter a valid number.';
-    if (v < -180 || v > 180) return 'Longitude must be between -180 and 180.';
-    return null;
-  }
-
   /// Runs client-side validation, populating [_fieldErrors]. Returns true when
-  /// the form is valid.
+  /// the form is valid. Location is captured silently at submit — never a field.
   bool _validateClient() {
     _fieldErrors.clear();
     if (_nameController.text.trim().isEmpty) {
@@ -226,25 +228,21 @@ class _GvpFormPageState extends State<GvpFormPage> {
     if (_wardId == null) {
       _fieldErrors['ward'] = ['Ward is required.'];
     }
-    final latErr = _validateLatitude(_latController.text);
-    if (latErr != null) _fieldErrors['latitude'] = [latErr];
-    final longErr = _validateLongitude(_longController.text);
-    if (longErr != null) _fieldErrors['longitude'] = [longErr];
 
     setState(() {});
     return _fieldErrors.isEmpty;
   }
 
   // ── Change detection (edit mode) ────────────────────────────────────────────
+  // Location is intentionally excluded — it is captured on the device and sent
+  // to the backend, never shown or edited here.
 
   bool get _hasChanges {
     if (!widget.isEdit) return true; // create always "changed"
     return _nameController.text.trim() != _initName ||
         (_project ?? '') != _initProject ||
         _zoneId != _initZoneId ||
-        _wardId != _initWardId ||
-        _latController.text.trim() != _initLat ||
-        _longController.text.trim() != _initLong;
+        _wardId != _initWardId;
   }
 
   Map<String, dynamic> _buildChangedFields() {
@@ -255,12 +253,6 @@ class _GvpFormPageState extends State<GvpFormPage> {
     if ((_project ?? '') != _initProject) map['project'] = _project;
     if (_zoneId != _initZoneId) map['zone'] = _zoneId;
     if (_wardId != _initWardId) map['ward'] = _wardId;
-    if (_latController.text.trim() != _initLat) {
-      map['latitude'] = _latController.text.trim();
-    }
-    if (_longController.text.trim() != _initLong) {
-      map['longitude'] = _longController.text.trim();
-    }
     return map;
   }
 
@@ -282,13 +274,16 @@ class _GvpFormPageState extends State<GvpFormPage> {
         if (!mounted) return;
         gvpSuccessSnack(context, 'GVP updated successfully');
       } else {
+        // Capture the device location silently (best-effort) and include it in
+        // the payload — it is never shown to or entered by the user.
+        final pos = await _tryCaptureLocation();
         final payload = GvpCreateRequest(
           name: _nameController.text,
           project: _project!,
           zone: _zoneId!,
           ward: _wardId!,
-          latitude: _latController.text,
-          longitude: _longController.text,
+          latitude: pos?.latitude.toString(),
+          longitude: pos?.longitude.toString(),
         );
         await _service.createGvp(payload);
         if (!mounted) return;
@@ -309,6 +304,31 @@ class _GvpFormPageState extends State<GvpFormPage> {
       }
     } finally {
       if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  /// Best-effort device location capture for the create payload. Returns null
+  /// (never throws) when GPS is off or permission is denied, so GVP creation is
+  /// never blocked. The coordinates are sent to the backend but never shown.
+  Future<Position?> _tryCaptureLocation() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) return null;
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        return null;
+      }
+      return await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+    } catch (_) {
+      return null;
     }
   }
 
@@ -333,9 +353,9 @@ class _GvpFormPageState extends State<GvpFormPage> {
   }
 
   Widget _buildBody() {
-    if (_optionsLoading) return const GvpLoading();
-    if (_optionsError != null) {
-      return GvpFullError(message: _optionsError!, onRetry: _loadOptions);
+    if (_projectsLoading) return const GvpLoading();
+    if (_projectsError != null) {
+      return GvpFullError(message: _projectsError!, onRetry: _loadProjects);
     }
 
     return ListView(
@@ -362,78 +382,37 @@ class _GvpFormPageState extends State<GvpFormPage> {
               items: _projectItems
                   .map((c) => DropdownMenuItem(
                         value: c.value,
-                        child: Text(c.label),
+                        child: Text(c.label, overflow: TextOverflow.ellipsis),
                       ))
                   .toList(),
               onChanged: _submitting
                   ? null
                   : (v) {
-                      setState(() => _project = v);
+                      if (v == null || v == _project) return;
+                      setState(() {
+                        _project = v;
+                        _zoneId = null;
+                        _wardId = null;
+                        _zoneItems = [];
+                        _wardItems = [];
+                        _zonesError = null;
+                        _wardError = null;
+                      });
                       _clearError('project');
+                      _clearError('zone');
+                      _clearError('ward');
+                      _loadZones(v);
                     },
             ),
             _errorText('project'),
             const SizedBox(height: 14),
             const _FieldLabel('Zone', required: true),
-            DropdownButtonFormField<int>(
-              value: _zoneId,
-              isExpanded: true,
-              decoration: _decor(hint: 'Select zone'),
-              items: _zoneItems
-                  .map((z) => DropdownMenuItem(
-                        value: z.id,
-                        child: Text(z.code),
-                      ))
-                  .toList(),
-              onChanged: _submitting
-                  ? null
-                  : (v) {
-                      setState(() {
-                        _zoneId = v;
-                        _wardId = null;
-                        _wardItems = [];
-                      });
-                      _clearError('zone');
-                      _clearError('ward');
-                      if (v != null) _loadWards(v);
-                    },
-            ),
+            _buildZoneField(),
             _errorText('zone'),
             const SizedBox(height: 14),
             const _FieldLabel('Ward', required: true),
             _buildWardField(),
             _errorText('ward'),
-          ],
-        ),
-        _SectionCard(
-          icon: Icons.my_location_rounded,
-          title: 'Location (optional)',
-          children: [
-            const _FieldLabel('Latitude'),
-            TextField(
-              controller: _latController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true, signed: true),
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
-              ],
-              decoration: _decor(hint: 'e.g. 12.987654'),
-              onChanged: (_) => _clearError('latitude'),
-            ),
-            _errorText('latitude'),
-            const SizedBox(height: 14),
-            const _FieldLabel('Longitude'),
-            TextField(
-              controller: _longController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true, signed: true),
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
-              ],
-              decoration: _decor(hint: 'e.g. 80.123456'),
-              onChanged: (_) => _clearError('longitude'),
-            ),
-            _errorText('longitude'),
           ],
         ),
         const SizedBox(height: 4),
@@ -442,46 +421,104 @@ class _GvpFormPageState extends State<GvpFormPage> {
     );
   }
 
-  Widget _buildWardField() {
-    if (_wardLoading) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 8),
-        child: Row(
-          children: [
-            SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2)),
-            SizedBox(width: 10),
-            Text('Loading wards…', style: TextStyle(fontSize: 13)),
-          ],
-        ),
+  Widget _buildZoneField() {
+    // Disabled until a project is chosen.
+    if (_project == null || _project!.isEmpty) {
+      return _disabledDropdown('Select a project first');
+    }
+    if (_zonesLoading) return _loadingField('Loading zones…');
+    if (_zonesError != null) {
+      return GvpInlineError(
+        message: _zonesError!,
+        onRetry: () => _loadZones(_project!),
       );
     }
+    return DropdownButtonFormField<int>(
+      value: _zoneId,
+      isExpanded: true,
+      decoration: _decor(hint: 'Select zone'),
+      items: _zoneItems
+          .map((z) => DropdownMenuItem(
+                value: z.id,
+                child: Text(z.code, overflow: TextOverflow.ellipsis),
+              ))
+          .toList(),
+      onChanged: _submitting
+          ? null
+          : (v) {
+              if (v == null || v == _zoneId) return;
+              setState(() {
+                _zoneId = v;
+                _wardId = null;
+                _wardItems = [];
+                _wardError = null;
+              });
+              _clearError('zone');
+              _clearError('ward');
+              _loadWards(v);
+            },
+    );
+  }
+
+  Widget _buildWardField() {
+    // Disabled until a zone is chosen.
+    if (_zoneId == null) {
+      return _disabledDropdown('Select a zone first');
+    }
+    if (_wardLoading) return _loadingField('Loading wards…');
     if (_wardError != null) {
       return GvpInlineError(
         message: _wardError!,
-        onRetry: () => _zoneId != null ? _loadWards(_zoneId!) : null,
+        onRetry: () => _loadWards(_zoneId!),
       );
     }
     return DropdownButtonFormField<int>(
       value: _wardId,
       isExpanded: true,
-      decoration: _decor(
-        hint: _zoneId == null ? 'Select a zone first' : 'Select ward',
-      ),
+      decoration: _decor(hint: 'Select ward'),
       items: _wardItems
           .map((w) => DropdownMenuItem(
                 value: w.id,
-                child: Text(w.code),
+                child: Text(w.code, overflow: TextOverflow.ellipsis),
               ))
           .toList(),
-      onChanged: (_submitting || _zoneId == null)
+      onChanged: _submitting
           ? null
           : (v) {
+              if (v == null) return;
               setState(() => _wardId = v);
               _clearError('ward');
             },
+    );
+  }
+
+  /// A greyed-out, non-interactive dropdown placeholder used while a dependency
+  /// (project / zone) has not been selected yet.
+  Widget _disabledDropdown(String hint) {
+    return DropdownButtonFormField<int>(
+      value: null,
+      isExpanded: true,
+      decoration: _decor(hint: hint),
+      items: const [],
+      onChanged: null,
+    );
+  }
+
+  /// An inline loading row shown in place of a dropdown while its data loads.
+  Widget _loadingField(String message) {
+    return InputDecorator(
+      decoration: _decor(),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Text(message, style: const TextStyle(fontSize: 13)),
+        ],
+      ),
     );
   }
 

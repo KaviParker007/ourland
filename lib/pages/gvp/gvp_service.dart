@@ -194,6 +194,63 @@ class GvpService {
     }
   }
 
+  // ── 2b. Dependent dropdown choices (Add GVP form) ─────────────────────────────
+  // These live at the API root (NOT under /gvp) and power the dependent
+  // Project → Zone → Ward hierarchy on the Add/Edit GVP form.
+
+  /// Projects the user may pick from. Parses `project_choices`: `[["MDU","Madurai"], …]`.
+  Future<List<GvpChoice>> getProjectChoices() async {
+    try {
+      final headers = await _authHeaders();
+      final uri = Uri.parse('${AppConfig.apiUrl}/drf_getmy_project_choices/');
+      final resp = await _send('GET', uri, headers: headers);
+      if (resp.statusCode != 200) throw _fromResponse(resp);
+      final data = _decode(resp);
+      final raw = (data is Map) ? data['project_choices'] : null;
+      return (raw is List)
+          ? raw.map(GvpChoice.fromDynamic).whereType<GvpChoice>().toList()
+          : <GvpChoice>[];
+    } catch (e) {
+      _mapError(e);
+    }
+  }
+
+  /// Zones for [projectCode]. Parses `user_project_zone_choices`: `[[7,"MDU-Z1"], …]`.
+  Future<List<GvpZoneChoice>> getProjectZoneChoices(String projectCode) async {
+    try {
+      final headers = await _authHeaders();
+      final uri = Uri.parse('${AppConfig.apiUrl}/drf_getmy_project_zone_choices/')
+          .replace(queryParameters: _clean({'project': projectCode}));
+      final resp = await _send('GET', uri, headers: headers);
+      if (resp.statusCode != 200) throw _fromResponse(resp);
+      final data = _decode(resp);
+      final raw = (data is Map) ? data['user_project_zone_choices'] : null;
+      return (raw is List)
+          ? raw.map(GvpZoneChoice.fromDynamic).whereType<GvpZoneChoice>().toList()
+          : <GvpZoneChoice>[];
+    } catch (e) {
+      _mapError(e);
+    }
+  }
+
+  /// Wards for [zoneId]. Parses `zonal_ward_choices`: `[[94,"MDU-Z1-W39"], …]`.
+  Future<List<GvpWardChoice>> getZonalWardChoices(int zoneId) async {
+    try {
+      final headers = await _authHeaders();
+      final uri = Uri.parse('${AppConfig.apiUrl}/drf_zonal_ward_choices/')
+          .replace(queryParameters: _clean({'zone_id': zoneId.toString()}));
+      final resp = await _send('GET', uri, headers: headers);
+      if (resp.statusCode != 200) throw _fromResponse(resp);
+      final data = _decode(resp);
+      final raw = (data is Map) ? data['zonal_ward_choices'] : null;
+      return (raw is List)
+          ? raw.map(GvpWardChoice.fromDynamic).whereType<GvpWardChoice>().toList()
+          : <GvpWardChoice>[];
+    } catch (e) {
+      _mapError(e);
+    }
+  }
+
   // ── 3. Create GVP ────────────────────────────────────────────────────────────
 
   Future<void> createGvp(GvpCreateRequest payload) async {
@@ -310,19 +367,26 @@ class GvpService {
 
   // ── API debug logging ─────────────────────────────────────────────────────────
   // Every GVP request goes through _send / _sendMultipart, which log a boxed
-  // REQUEST (method, full URL, headers, body) and RESPONSE (method, URL, status
-  // code, body) block. The Authorization credential is always masked so logs
-  // never leak the Basic-auth token. Logging never alters the returned response.
+  // REQUEST block (method, API URL, query params, headers, body params) and a
+  // RESPONSE block (status code, execution time, response/error body). Network
+  // failures (timeouts, no connectivity) are logged as a REQUEST FAILED block.
+  // The Authorization credential is always masked so logs never leak the
+  // Basic-auth token. Logging never alters the returned response.
 
   void _logApi({required String title, required List<String> lines}) {
+    const bar = '══════════════════════════════════════════════════════════';
     final buffer = StringBuffer()
-      ..writeln('\n╔══════════════════════════════════════════════════════════')
+      ..writeln('\n╔$bar')
       ..writeln('║ $title')
-      ..writeln('╟──────────────────────────────────────────────────────────');
+      ..writeln('╟$bar');
     for (final line in lines) {
-      buffer.writeln('║ $line');
+      // Split embedded newlines (pretty-printed JSON) so every physical line
+      // keeps the box prefix and stays aligned.
+      for (final sub in line.split('\n')) {
+        buffer.writeln('║ $sub');
+      }
     }
-    buffer.write('╚══════════════════════════════════════════════════════════');
+    buffer.write('╚$bar');
     // ignore: avoid_print
     print(buffer.toString());
   }
@@ -336,6 +400,89 @@ class GvpService {
     return masked;
   }
 
+  /// The URL without its query string (query params are logged separately).
+  String _baseUrlOf(Uri uri) => '${uri.scheme}://${uri.authority}${uri.path}';
+
+  /// Pretty-prints a JSON string/body for readable console output; falls back
+  /// to the raw text when it is not valid JSON.
+  String _prettyBody(Object? body) {
+    if (body == null) return '(none)';
+    final raw = body is String ? body : body.toString();
+    if (raw.isEmpty) return '(empty)';
+    try {
+      return const JsonEncoder.withIndent('  ').convert(jsonDecode(raw));
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  void _logRequest({
+    required String method,
+    required Uri uri,
+    required Map<String, String> headers,
+    Object? body,
+    Map<String, String>? multipartFields,
+    List<String>? multipartFiles,
+  }) {
+    final qp = uri.queryParameters;
+    final lines = <String>[
+      'HTTP Method   : $method',
+      'API URL       : ${_baseUrlOf(uri)}',
+      'Query Params  : ${qp.isEmpty ? '(none)' : qp}',
+      'Headers       : ${_maskHeaders(headers)}',
+    ];
+    if (multipartFields != null) {
+      lines
+        ..add('Content-Type  : multipart/form-data')
+        ..add('Body Params   : '
+            '${multipartFields.isEmpty ? '(none)' : multipartFields}')
+        ..add('Files         : '
+            '${(multipartFiles == null || multipartFiles.isEmpty) ? '(none)' : multipartFiles.join(', ')}');
+    } else {
+      lines.add('Body Params   : ${_prettyBody(body)}');
+    }
+    _logApi(title: 'GVP API ▶ REQUEST', lines: lines);
+  }
+
+  void _logResponse({
+    required String method,
+    required Uri uri,
+    required int statusCode,
+    required String body,
+    required Duration elapsed,
+  }) {
+    final isError = statusCode < 200 || statusCode >= 300;
+    final lines = <String>[
+      'HTTP Method   : $method',
+      'API URL       : ${_baseUrlOf(uri)}',
+      'Status Code   : $statusCode',
+      'Execution Time: ${elapsed.inMilliseconds} ms',
+      isError
+          ? 'Error Response: ${_prettyBody(body)}'
+          : 'Response Body : ${_prettyBody(body)}',
+    ];
+    _logApi(
+      title: isError
+          ? 'GVP API ✖ RESPONSE ($statusCode)'
+          : 'GVP API ✔ RESPONSE ($statusCode)',
+      lines: lines,
+    );
+  }
+
+  void _logError({
+    required String method,
+    required Uri uri,
+    required Object error,
+    required Duration elapsed,
+  }) {
+    _logApi(title: 'GVP API ✖ REQUEST FAILED', lines: [
+      'HTTP Method   : $method',
+      'API URL       : ${_baseUrlOf(uri)}',
+      'Execution Time: ${elapsed.inMilliseconds} ms',
+      'Error         : $error',
+    ]);
+  }
+
   /// Sends a GET/POST/PATCH/DELETE request with consistent request/response
   /// logging, returning the raw [http.Response] for the caller to handle.
   Future<http.Response> _send(
@@ -344,65 +491,81 @@ class GvpService {
     required Map<String, String> headers,
     Object? body,
   }) async {
-    _logApi(title: 'GVP API — REQUEST', lines: [
-      'Method       : $method',
-      'URL          : $uri',
-      'Headers      : ${_maskHeaders(headers)}',
-      'Request Body : ${body ?? 'None'}',
-    ]);
-
-    final http.Response resp;
-    switch (method) {
-      case 'GET':
-        resp = await http.get(uri, headers: headers).timeout(_timeout);
-        break;
-      case 'POST':
-        resp =
-            await http.post(uri, headers: headers, body: body).timeout(_timeout);
-        break;
-      case 'PATCH':
-        resp = await http
-            .patch(uri, headers: headers, body: body)
-            .timeout(_timeout);
-        break;
-      case 'DELETE':
-        resp = await http.delete(uri, headers: headers).timeout(_timeout);
-        break;
-      default:
-        throw GvpApiException('Unsupported HTTP method: $method');
+    _logRequest(method: method, uri: uri, headers: headers, body: body);
+    final sw = Stopwatch()..start();
+    try {
+      final http.Response resp;
+      switch (method) {
+        case 'GET':
+          resp = await http.get(uri, headers: headers).timeout(_timeout);
+          break;
+        case 'POST':
+          resp = await http
+              .post(uri, headers: headers, body: body)
+              .timeout(_timeout);
+          break;
+        case 'PATCH':
+          resp = await http
+              .patch(uri, headers: headers, body: body)
+              .timeout(_timeout);
+          break;
+        case 'DELETE':
+          resp = await http.delete(uri, headers: headers).timeout(_timeout);
+          break;
+        default:
+          throw GvpApiException('Unsupported HTTP method: $method');
+      }
+      sw.stop();
+      _logResponse(
+        method: method,
+        uri: uri,
+        statusCode: resp.statusCode,
+        body: resp.body,
+        elapsed: sw.elapsed,
+      );
+      return resp;
+    } catch (e) {
+      sw.stop();
+      _logError(method: method, uri: uri, error: e, elapsed: sw.elapsed);
+      rethrow;
     }
-
-    _logApi(title: 'GVP API — RESPONSE', lines: [
-      'Method       : $method',
-      'URL          : $uri',
-      'Status Code  : ${resp.statusCode}',
-      'Response Body: ${resp.body.isEmpty ? '(empty)' : resp.body}',
-    ]);
-    return resp;
   }
 
   /// Sends a multipart request (image uploads) with the same logging shape,
   /// listing the text fields and attached file field names/sizes.
   Future<http.Response> _sendMultipart(http.MultipartRequest request) async {
-    _logApi(title: 'GVP API — REQUEST', lines: [
-      'Method       : ${request.method}',
-      'URL          : ${request.url}',
-      'Headers      : ${_maskHeaders(request.headers)}',
-      'Request Body : (multipart/form-data)',
-      'Fields       : ${request.fields}',
-      'Files        : ${request.files.map((f) => '${f.field}="${f.filename}" (${f.length} bytes)').toList()}',
-    ]);
-
-    final streamed = await request.send().timeout(_timeout);
-    final resp = await http.Response.fromStream(streamed);
-
-    _logApi(title: 'GVP API — RESPONSE', lines: [
-      'Method       : ${request.method}',
-      'URL          : ${request.url}',
-      'Status Code  : ${resp.statusCode}',
-      'Response Body: ${resp.body.isEmpty ? '(empty)' : resp.body}',
-    ]);
-    return resp;
+    _logRequest(
+      method: request.method,
+      uri: request.url,
+      headers: request.headers,
+      multipartFields: request.fields,
+      multipartFiles: request.files
+          .map((f) => '${f.field}="${f.filename}" (${f.length} bytes)')
+          .toList(),
+    );
+    final sw = Stopwatch()..start();
+    try {
+      final streamed = await request.send().timeout(_timeout);
+      final resp = await http.Response.fromStream(streamed);
+      sw.stop();
+      _logResponse(
+        method: request.method,
+        uri: request.url,
+        statusCode: resp.statusCode,
+        body: resp.body,
+        elapsed: sw.elapsed,
+      );
+      return resp;
+    } catch (e) {
+      sw.stop();
+      _logError(
+        method: request.method,
+        uri: request.url,
+        error: e,
+        elapsed: sw.elapsed,
+      );
+      rethrow;
+    }
   }
 
   // ── 9. Queried GVP list (final drill-down) ───────────────────────────────────
