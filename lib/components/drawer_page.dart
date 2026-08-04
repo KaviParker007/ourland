@@ -14,7 +14,6 @@ class _AppDrawerState extends State<AppDrawer> {
   String? menu;
   bool isSuperUser = true;
   bool isAttendanceExpanded = false; // Track if attendance submenu is expanded
-  bool isGvpExpanded = false; // Track if GVP submenu is expanded
 
   @override
   void initState() {
@@ -83,49 +82,14 @@ class _AppDrawerState extends State<AppDrawer> {
                   },
                 ),
 
-                // GVP with submenu
-                Column(
-                  children: [
-                    ListTile(
-                      selected: menu == "gvp_dashboard" || menu == "gvp_list",
-                      leading: const Icon(Icons.delete_sweep_outlined),
-                      title: const Text("GVP"),
-                      trailing: Icon(
-                        isGvpExpanded ? Icons.expand_less : Icons.expand_more,
-                      ),
-                      onTap: () {
-                        setState(() {
-                          isGvpExpanded = !isGvpExpanded;
-                        });
-                      },
-                    ),
-                    // Submenu items
-                    if (isGvpExpanded) ...[
-                      Padding(
-                        padding: const EdgeInsets.only(left: 24.0),
-                        child: ListTile(
-                          selected: menu == "gvp_dashboard",
-                          leading: const Icon(Icons.dashboard_outlined, size: 20),
-                          title: const Text("Dashboard"),
-                          onTap: () {
-                            Navigator.pushReplacementNamed(
-                                context, '/gvp_dashboard');
-                          },
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.only(left: 24.0),
-                        child: ListTile(
-                          selected: menu == "gvp_list",
-                          leading: const Icon(Icons.list_alt, size: 20),
-                          title: const Text("GVP List"),
-                          onTap: () {
-                            Navigator.pushReplacementNamed(context, '/gvp_list');
-                          },
-                        ),
-                      ),
-                    ],
-                  ],
+                // GVP Dashboard
+                ListTile(
+                  selected: menu == "gvp_dashboard",
+                  leading: const Icon(Icons.delete_sweep_outlined),
+                  title: const Text("GVP Dashboard"),
+                  onTap: () {
+                    Navigator.pushReplacementNamed(context, '/gvp_dashboard');
+                  },
                 ),
 
                 ListTile(

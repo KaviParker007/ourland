@@ -14,7 +14,6 @@ import 'package:ourlandnew/pages/operation/operation_page.dart';
 import 'package:ourlandnew/pages/shifts/shift_list.dart';
 import 'package:ourlandnew/pages/shifts/shift_dashboard.dart';
 import 'package:ourlandnew/pages/gvp/gvp_dashboard.dart';
-import 'package:ourlandnew/pages/gvp/gvp_list.dart';
 import 'package:ourlandnew/pages/zones/zones_list.dart';
 import 'package:ourlandnew/theme/dark_mode.dart';
 
@@ -42,7 +41,6 @@ class MyApp extends StatelessWidget {
         "/shift_list": (context) => const ShiftListPage(),
         "/shift_dashboard": (context) => const ShiftDashboardPage(),
         "/gvp_dashboard": (context) => const GvpDashboardPage(),
-        "/gvp_list": (context) => const GvpListPage(),
         "/fuel_log_list": (context) => const FuelLogList(),
         "/job_card_list": (context) => const JobCardList(),
         "/fuel_station_list": (context) => const FuelStationList(),

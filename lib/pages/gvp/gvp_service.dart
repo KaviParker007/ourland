@@ -150,36 +150,7 @@ class GvpService {
     }
   }
 
-  // ── 1. GVP list ─────────────────────────────────────────────────────────────
-
-  Future<List<Gvp>> getGvpList({
-    String? zone,
-    String? ward,
-    String? project,
-  }) async {
-    try {
-      final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf_gvp_list/').replace(
-        queryParameters: _clean({
-          'zone': zone,
-          'ward': ward,
-          'project': project,
-        }),
-      );
-      final resp = await _send('GET', uri, headers: headers);
-      if (resp.statusCode != 200) throw _fromResponse(resp);
-      final data = _decode(resp);
-      final list = data is List ? data : (data['results'] ?? data['data'] ?? []);
-      return (list as List)
-          .whereType<Map>()
-          .map((e) => Gvp.fromJson(Map<String, dynamic>.from(e)))
-          .toList();
-    } catch (e) {
-      _mapError(e);
-    }
-  }
-
-  // ── 2. Create-form options ──────────────────────────────────────────────────
+  // ── 1. Create-form options ──────────────────────────────────────────────────
 
   Future<GvpCreateOptions> getGvpCreateOptions() async {
     try {
