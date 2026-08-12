@@ -19,6 +19,10 @@ const _kVehicleColors = <String, Color>{
   'Compactor': Color(0xFF26C6DA),
 };
 
+// Shift-status filters. The selected value is sent as the `shift_status` query
+// param and used to read the matching list back from the response (data[value]).
+const _kShiftFilters = ['Open', 'Closed', 'Long', 'Unclosed'];
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 class ShiftDashboardPage extends StatefulWidget {
@@ -34,7 +38,7 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
   final String _baseUrl = AppConfig.apiUrl;
 
   DateTime _selectedDate = DateTime.now();
-  String _shiftStatus = 'Normal';
+  String _shiftStatus = 'Open';
 
   // Level 1 — projects
   List<Map<String, dynamic>> _projectList = [];
@@ -75,9 +79,94 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
   }
 
   Map<String, String> _baseParams() {
-    final p = <String, String>{'shift_status': _shiftStatus};
-    if (_shiftStatus == 'Normal') p['date'] = _dateStr;
-    return p;
+    // Every filter is date-scoped: send the selected date with each request.
+    return {'shift_status': _shiftStatus, 'date': _dateStr};
+  }
+
+  // ── API debug logging ───────────────────────────────────────────────────────
+  // Every dashboard request goes through _loggedGet, which prints a boxed
+  // REQUEST block (method, URL, query params, headers, body) and a RESPONSE
+  // block (status code, headers, body) — or a REQUEST FAILED block on a network
+  // error. The Authorization credential is masked. Logging never alters the
+  // returned response or the module's behaviour.
+
+  /// Returns a copy of [headers] with the Authorization value masked.
+  Map<String, String> _maskHeaders(Map<String, String> headers) {
+    final masked = Map<String, String>.from(headers);
+    if (masked.containsKey('authorization')) {
+      masked['authorization'] = 'Basic ****** (masked)';
+    }
+    return masked;
+  }
+
+  /// Pretty-prints a JSON body for readable console output; falls back to the
+  /// raw text when it is not valid JSON.
+  String _prettyBody(String raw) {
+    if (raw.isEmpty) return '(empty)';
+    try {
+      return const JsonEncoder.withIndent('  ').convert(jsonDecode(raw));
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  void _logBox(String title, List<String> lines) {
+    const bar = '══════════════════════════════════════════════════════════';
+    final buffer = StringBuffer()
+      ..writeln('\n╔$bar')
+      ..writeln('║ $title')
+      ..writeln('╟$bar');
+    for (final line in lines) {
+      // Split embedded newlines (pretty JSON) so each physical line keeps the
+      // box prefix and stays aligned.
+      for (final sub in line.split('\n')) {
+        buffer.writeln('║ $sub');
+      }
+    }
+    buffer.write('╚$bar');
+    // ignore: avoid_print
+    print(buffer.toString());
+  }
+
+  /// Performs a GET with full request/response logging and returns the raw
+  /// response for the caller to handle. Network errors are logged then
+  /// rethrown so the existing error handling is preserved.
+  Future<http.Response> _loggedGet(Uri uri) async {
+    const method = 'GET';
+    _logBox('SHIFT API ▶ REQUEST', [
+      'Method        : $method',
+      'URL           : $uri',
+      'Query Params  : '
+          '${uri.queryParameters.isEmpty ? '(none)' : uri.queryParameters}',
+      'Headers       : ${_maskHeaders(_authHeaders)}',
+      'Body/Payload  : (none)',
+    ]);
+    try {
+      final resp = await http.get(uri, headers: _authHeaders);
+      final isError = resp.statusCode < 200 || resp.statusCode >= 300;
+      _logBox(
+        isError
+            ? 'SHIFT API ✖ RESPONSE (${resp.statusCode})'
+            : 'SHIFT API ✔ RESPONSE (${resp.statusCode})',
+        [
+          'Method        : $method',
+          'URL           : $uri',
+          'Status Code   : ${resp.statusCode}',
+          'Resp Headers  : ${resp.headers}',
+          isError
+              ? 'Error Response: ${_prettyBody(resp.body)}'
+              : 'Response Body : ${_prettyBody(resp.body)}',
+        ],
+      );
+      return resp;
+    } catch (e) {
+      _logBox('SHIFT API ✖ REQUEST FAILED', [
+        'Method        : $method',
+        'URL           : $uri',
+        'Error         : $e',
+      ]);
+      rethrow;
+    }
   }
 
   Future<void> _fetchProjects() async {
@@ -91,7 +180,7 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
     try {
       final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_project/')
           .replace(queryParameters: _baseParams());
-      final resp = await http.get(uri, headers: _authHeaders);
+      final resp = await _loggedGet(uri);
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map;
         final list = data[_shiftStatus] as List? ?? [];
@@ -119,7 +208,7 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
       final params = _baseParams()..['project'] = project;
       final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_zone/')
           .replace(queryParameters: params);
-      final resp = await http.get(uri, headers: _authHeaders);
+      final resp = await _loggedGet(uri);
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map;
         final list = data[_shiftStatus] as List? ?? [];
@@ -147,7 +236,7 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
       final params = _baseParams()..['zone_code'] = zone;
       final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_ward/')
           .replace(queryParameters: params);
-      final resp = await http.get(uri, headers: _authHeaders);
+      final resp = await _loggedGet(uri);
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body) as Map;
         final list = data[_shiftStatus] as List? ?? [];
@@ -199,9 +288,17 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
   void _goToQueried(Map<String, String?> extra) {
     final params = <String, String?>{
       'shift_status': _shiftStatus,
-      if (_shiftStatus == 'Normal') 'date': _dateStr,
+      'date': _dateStr,
       ...extra,
     };
+    // Breadcrumb hierarchy (display only — does not change the API query). The
+    // drill-down sends only the deepest filter, but we carry the parent
+    // project/zone so the queried page can render Projects › MDU › MDU-Z1,
+    // mirroring the GVP Dashboard.
+    final projectLabel = extra['project'] ?? _expandedProject;
+    final zoneLabel =
+        extra['zone'] ?? (extra['ward_code'] != null ? _expandedZone : null);
+    final wardLabel = extra['ward_code'];
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -209,6 +306,9 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
           params: params,
           username: username!,
           password: password!,
+          project: projectLabel,
+          zone: zoneLabel,
+          ward: wardLabel,
         ),
       ),
     );
@@ -266,8 +366,17 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
     );
   }
 
+  void _selectFilter(String status) {
+    if (_shiftStatus == status) return;
+    setState(() {
+      _shiftStatus = status;
+      _expandedProject = null;
+      _expandedZone = null;
+    });
+    _fetchProjects();
+  }
+
   Widget _buildControls() {
-    final isNormal = _shiftStatus == 'Normal';
     final primary = Theme.of(context).colorScheme.primary;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
@@ -281,84 +390,74 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Custom segmented toggle
-          Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              color: Colors.black.withAlpha(40),
-              border: Border.all(
-                color: Colors.white.withAlpha(18),
-                width: 1,
+          // Date pill — always visible, right-aligned.
+          Row(
+            children: [
+              const Spacer(),
+              _buildDatePill(primary),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Status filter tabs — horizontally scrollable so the five options
+          // never overflow on narrow screens.
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                color: Colors.black.withAlpha(40),
+                border: Border.all(
+                  color: Colors.white.withAlpha(18),
+                  width: 1,
+                ),
               ),
-            ),
-            padding: const EdgeInsets.all(3),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _StatusTab(
-                  label: 'Normal',
-                  isActive: isNormal,
-                  onTap: () {
-                    if (isNormal) return;
-                    setState(() {
-                      _shiftStatus = 'Normal';
-                      _expandedProject = null;
-                      _expandedZone = null;
-                    });
-                    _fetchProjects();
-                  },
-                ),
-                _StatusTab(
-                  label: 'Unclosed',
-                  isActive: !isNormal,
-                  onTap: () {
-                    if (!isNormal) return;
-                    setState(() {
-                      _shiftStatus = 'Unclosed';
-                      _expandedProject = null;
-                      _expandedZone = null;
-                    });
-                    _fetchProjects();
-                  },
-                ),
-              ],
+              padding: const EdgeInsets.all(3),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final filter in _kShiftFilters)
+                    _StatusTab(
+                      label: filter,
+                      isActive: _shiftStatus == filter,
+                      onTap: () => _selectFilter(filter),
+                    ),
+                ],
+              ),
             ),
           ),
-          const Spacer(),
-          // Date pill button (Normal mode only)
-          if (isNormal)
-            GestureDetector(
-              onTap: _pickDate,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  border:
-                      Border.all(color: primary.withAlpha(140), width: 1.2),
-                  color: primary.withAlpha(22),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.calendar_month_outlined,
-                        size: 14, color: primary),
-                    const SizedBox(width: 6),
-                    Text(
-                      DateFormat('dd MMM yyyy').format(_selectedDate),
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: primary,
-                      ),
-                    ),
-                  ],
-                ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDatePill(Color primary) {
+    return GestureDetector(
+      onTap: _pickDate,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: primary.withAlpha(140), width: 1.2),
+          color: primary.withAlpha(22),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.calendar_month_outlined, size: 14, color: primary),
+            const SizedBox(width: 6),
+            Text(
+              DateFormat('dd MMM yyyy').format(_selectedDate),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: primary,
               ),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -44,11 +44,20 @@ class QueriedShiftsPage extends StatefulWidget {
   final String username;
   final String password;
 
+  /// Breadcrumb hierarchy (display only). Carried from the dashboard so the
+  /// page can render Projects › Project › Zone › Ward like the GVP Dashboard.
+  final String? project;
+  final String? zone;
+  final String? ward;
+
   const QueriedShiftsPage({
     super.key,
     required this.params,
     required this.username,
     required this.password,
+    this.project,
+    this.zone,
+    this.ward,
   });
 
   @override
@@ -110,15 +119,21 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
     }
   }
 
-  // Build a human-readable scope string for the AppBar title
-  String get _scopeTitle {
-    final parts = <String>[];
-    if (widget.params['project'] != null) parts.add(widget.params['project']!);
-    if (widget.params['zone'] != null) parts.add(widget.params['zone']!);
-    if (widget.params['ward_code'] != null) {
-      parts.add(widget.params['ward_code']!);
-    }
-    return parts.isEmpty ? 'Shifts' : parts.join(' › ');
+  // ── Breadcrumb hierarchy (falls back to query params for safety) ────────────
+  String? get _project => widget.project ?? widget.params['project'];
+  String? get _zone => widget.zone ?? widget.params['zone'];
+  String? get _ward => widget.ward ?? widget.params['ward_code'];
+
+  bool get _isWardLevel => _ward != null;
+  bool get _isZoneLevel => _ward == null && _zone != null;
+  bool get _isProjectLevel => _ward == null && _zone == null;
+
+  /// The deepest selected scope name — used as the AppBar title.
+  String get _title {
+    if (_ward != null) return _ward!;
+    if (_zone != null) return _zone!;
+    if (_project != null) return _project!;
+    return 'Shifts';
   }
 
   String? get _vehicleType => widget.params['vehicle_type'];
@@ -126,6 +141,13 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final crumbs = <_Crumb>[
+      _Crumb('Projects', tappable: true),
+      if (_project != null) _Crumb(_project!, tappable: !_isProjectLevel),
+      if (_zone != null) _Crumb(_zone!, tappable: !_isZoneLevel),
+      if (_ward != null) _Crumb(_ward!, tappable: false),
+    ];
+
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
@@ -133,7 +155,7 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              _scopeTitle,
+              _title,
               style: const TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 16,
@@ -154,13 +176,23 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
         backgroundColor: Colors.transparent,
         elevation: 0,
       ),
-      body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : error != null
-              ? _buildError()
-              : shifts.isEmpty
-                  ? _buildEmpty()
-                  : _buildList(),
+      body: Column(
+        children: [
+          _Breadcrumb(
+            crumbs: crumbs,
+            onCrumbTap: () => Navigator.pop(context),
+          ),
+          Expanded(
+            child: isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : error != null
+                    ? _buildError()
+                    : shifts.isEmpty
+                        ? _buildEmpty()
+                        : _buildList(),
+          ),
+        ],
+      ),
     );
   }
 
@@ -265,6 +297,74 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
       ),
     );
   }
+}
+
+// ── Breadcrumb (Projects › Project › Zone › Ward) ─────────────────────────────
+// Mirrors the GVP Dashboard breadcrumb. Tapping any earlier crumb pops back to
+// the still-expanded Shift Dashboard, preserving the selected context.
+
+class _Breadcrumb extends StatelessWidget {
+  final List<_Crumb> crumbs;
+  final VoidCallback onCrumbTap;
+
+  const _Breadcrumb({required this.crumbs, required this.onCrumbTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withAlpha(30),
+            blurRadius: 5,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (var i = 0; i < crumbs.length; i++) ...[
+              if (i > 0)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Icon(Icons.chevron_right_rounded,
+                      size: 16, color: onSurface.withAlpha(90)),
+                ),
+              GestureDetector(
+                onTap: crumbs[i].tappable ? onCrumbTap : null,
+                child: Text(
+                  crumbs[i].label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: i == crumbs.length - 1
+                        ? FontWeight.w700
+                        : FontWeight.w500,
+                    color: crumbs[i].tappable
+                        ? primary
+                        : onSurface.withAlpha(200),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Crumb {
+  final String label;
+  final bool tappable;
+  _Crumb(this.label, {required this.tappable});
 }
 
 // ── Result count + filter banner ─────────────────────────────────────────────
