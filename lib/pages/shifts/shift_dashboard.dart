@@ -178,7 +178,7 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
       _expandedZone = null;
     });
     try {
-      final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_project/')
+      final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_project_v2/')
           .replace(queryParameters: _baseParams());
       final resp = await _loggedGet(uri);
       if (resp.statusCode == 200) {
@@ -206,7 +206,7 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
     });
     try {
       final params = _baseParams()..['project'] = project;
-      final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_zone/')
+      final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_zone_v2/')
           .replace(queryParameters: params);
       final resp = await _loggedGet(uri);
       if (resp.statusCode == 200) {
@@ -234,7 +234,7 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
     });
     try {
       final params = _baseParams()..['zone_code'] = zone;
-      final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_ward/')
+      final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_ward_v2/')
           .replace(queryParameters: params);
       final resp = await _loggedGet(uri);
       if (resp.statusCode == 200) {

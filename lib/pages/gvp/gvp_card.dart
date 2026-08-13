@@ -106,20 +106,8 @@ class GvpCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      if (gvp.project.isNotEmpty)
-                        _Badge(label: gvp.project, color: primary),
-                      if (gvp.project.isNotEmpty) const SizedBox(height: 4),
-                      _Badge(
-                        label: gvp.active ? 'ACTIVE' : 'INACTIVE',
-                        color: gvp.active
-                            ? Colors.green
-                            : Theme.of(context).colorScheme.error,
-                      ),
-                    ],
-                  ),
+                  if (gvp.project.isNotEmpty)
+                    _Badge(label: gvp.project, color: primary),
                 ],
               ),
             ),

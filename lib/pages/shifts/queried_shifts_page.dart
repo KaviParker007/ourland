@@ -87,7 +87,7 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
             .where((e) => e.value != null)
             .map((e) => MapEntry(e.key, e.value!)),
       );
-      final uri = Uri.parse('$_baseUrl/drf_list_queried_shifts/')
+      final uri = Uri.parse('$_baseUrl/drf_list_queried_shifts_v2/')
           .replace(queryParameters: cleanParams);
       final auth =
           'Basic ${base64Encode(utf8.encode('${widget.username}:${widget.password}'))}';

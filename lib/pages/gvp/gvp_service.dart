@@ -540,21 +540,22 @@ class GvpService {
   }
 
   // ── 9. Queried GVP list (final drill-down) ───────────────────────────────────
-  // Send ONLY the most specific selected filter (ward_id > zone_id > project).
+  // Sends the full selected hierarchy (project / zone_id / ward_id) plus the
+  // optional today_status filter, e.g.:
+  //   /gvp/drf_list_queried_gvp/?project=MDU&zone_id=7&ward_id=75&today_status=C
 
   Future<List<Gvp>> getQueriedGvpList({
     int? wardId,
     int? zoneId,
     String? project,
+    String? todayStatus,
   }) async {
-    final params = <String, String>{};
-    if (wardId != null) {
-      params['ward_id'] = wardId.toString();
-    } else if (zoneId != null) {
-      params['zone_id'] = zoneId.toString();
-    } else if (project != null && project.isNotEmpty) {
-      params['project'] = project;
-    }
+    final params = _clean({
+      'project': project,
+      'zone_id': zoneId?.toString(),
+      'ward_id': wardId?.toString(),
+      'today_status': todayStatus,
+    });
     try {
       final headers = await _authHeaders();
       final uri = Uri.parse('$_baseUrl/drf_list_queried_gvp/')

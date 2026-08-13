@@ -10,9 +10,17 @@ import 'package:flutter/material.dart';
 import 'gvp_models.dart';
 import 'gvp_service.dart';
 import 'gvp_ui.dart';
+import 'gvp_status.dart';
 import 'gvp_daily_confirmation.dart';
 import 'gvp_detail.dart';
 import 'gvp_name_resolver.dart';
+
+/// The only today_status values shown on the queried GVP screen.
+const List<GvpTodayStatus> kGvpValidStatuses = [
+  GvpTodayStatus.nt, // NC
+  GvpTodayStatus.wip,
+  GvpTodayStatus.cleared, // C
+];
 
 /// Immutable selection carried through the drill-down.
 class GvpDrillContext {
@@ -52,6 +60,10 @@ class _QueriedGvpListPageState extends State<QueriedGvpListPage> {
   List<Gvp> _gvps = [];
   bool _loading = true;
   String? _error;
+  bool _initialLoad = true;
+
+  /// Selected today_status filter. Null = All (no today_status param sent).
+  GvpTodayStatus? _statusFilter;
 
   GvpDrillContext get _ctx => widget.context;
 
@@ -74,6 +86,7 @@ class _QueriedGvpListPageState extends State<QueriedGvpListPage> {
         wardId: _ctx.wardId,
         zoneId: _ctx.zoneId,
         project: _ctx.project,
+        todayStatus: _statusFilter?.code,
       );
       if (!mounted) return;
       setState(() => _gvps = data);
@@ -86,8 +99,20 @@ class _QueriedGvpListPageState extends State<QueriedGvpListPage> {
     } on GvpApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _initialLoad = false;
+        });
+      }
     }
+  }
+
+  /// Re-queries the API with the chosen today_status (null = All).
+  void _onStatusSelected(GvpTodayStatus? status) {
+    if (_statusFilter == status) return;
+    setState(() => _statusFilter = status);
+    _fetch();
   }
 
   void _openDetail(Gvp gvp) {
@@ -121,6 +146,13 @@ class _QueriedGvpListPageState extends State<QueriedGvpListPage> {
             context: _ctx,
             onCrumbTap: () => Navigator.pop(context),
           ),
+          // Status filter — visible after the first load (stays put during
+          // filter-triggered re-fetches so the user can keep switching).
+          if (!_initialLoad && _error == null)
+            _StatusFilterBar(
+              selected: _statusFilter,
+              onSelected: _onStatusSelected,
+            ),
           Expanded(child: _buildBody()),
         ],
       ),
@@ -131,12 +163,16 @@ class _QueriedGvpListPageState extends State<QueriedGvpListPage> {
     if (_loading) return const GvpLoading();
     if (_error != null) return GvpFullError(message: _error!, onRetry: _fetch);
     if (_gvps.isEmpty) {
-      return const GvpEmpty(
-        message: 'No GVPs found',
-        hint: 'There are no GVP records for this selection.',
+      final label = _statusFilter?.code;
+      return GvpEmpty(
+        message: label != null ? 'No matching GVPs' : 'No GVPs found',
+        hint: label != null
+            ? 'No GVPs with status "$label" in this selection.'
+            : 'There are no GVP records for this selection.',
         icon: Icons.search_off_rounded,
       );
     }
+
     return RefreshIndicator(
       onRefresh: _fetch,
       child: ListView.builder(
@@ -153,6 +189,110 @@ class _QueriedGvpListPageState extends State<QueriedGvpListPage> {
             onView: () => _openDetail(gvp),
           );
         },
+      ),
+    );
+  }
+}
+
+// ── Status filter bar (NC / WIP / C) ──────────────────────────────────────────
+
+class _StatusFilterBar extends StatelessWidget {
+  final GvpTodayStatus? selected;
+  final ValueChanged<GvpTodayStatus?> onSelected;
+
+  const _StatusFilterBar({
+    required this.selected,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    // "All" plus the three valid statuses, in order.
+    final options = <MapEntry<String, GvpTodayStatus?>>[
+      const MapEntry('All', null),
+      for (final s in kGvpValidStatuses) MapEntry(s.code ?? '—', s),
+    ];
+
+    return Container(
+      width: double.infinity,
+      color: Theme.of(context).colorScheme.surface,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (var i = 0; i < options.length; i++) ...[
+              if (i > 0) const SizedBox(width: 8),
+              _FilterChip(
+                label: options[i].key,
+                color: options[i].value == null
+                    ? primary
+                    : GvpStatusStyle.of(options[i].value!).color,
+                showDot: options[i].value != null,
+                selected: selected == options[i].value,
+                onTap: () => onSelected(options[i].value),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool showDot;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _FilterChip({
+    required this.label,
+    required this.color,
+    required this.showDot,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeInOut,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? color.withAlpha(40) : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? color : color.withAlpha(90),
+            width: selected ? 1.4 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (showDot) ...[
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12.5,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
