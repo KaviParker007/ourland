@@ -14,6 +14,7 @@ class _AppDrawerState extends State<AppDrawer> {
   String? menu;
   bool isSuperUser = true;
   bool isAttendanceExpanded = false; // Track if attendance submenu is expanded
+  bool isVehicleExpanded = false; // Track if vehicle submenu is expanded
 
   @override
   void initState() {
@@ -56,13 +57,52 @@ class _AppDrawerState extends State<AppDrawer> {
                 const SizedBox(height: 10),
 
                 if (isSuperUser)
-                  ListTile(
-                    selected: menu == "vehicles",
-                    leading: const Icon(Icons.directions_car),
-                    title: const Text("Vehicle"),
-                    onTap: () {
-                      Navigator.pushReplacementNamed(context, '/vehicles_list');
-                    },
+                  // Vehicle with submenu: Classic (existing list) + Vehicle Type
+                  Column(
+                    children: [
+                      ListTile(
+                        selected: menu == "vehicles" ||
+                            menu == "vehicle_type_dashboard",
+                        leading: const Icon(Icons.directions_car),
+                        title: const Text("Vehicle"),
+                        trailing: Icon(isVehicleExpanded
+                            ? Icons.expand_less
+                            : Icons.expand_more),
+                        onTap: () {
+                          setState(() {
+                            isVehicleExpanded = !isVehicleExpanded;
+                          });
+                        },
+                      ),
+                      if (isVehicleExpanded) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(left: 24.0),
+                          child: ListTile(
+                            selected: menu == "vehicles",
+                            leading:
+                                const Icon(Icons.list_alt_rounded, size: 20),
+                            title: const Text("Classic"),
+                            onTap: () {
+                              Navigator.pushReplacementNamed(
+                                  context, '/vehicles_list');
+                            },
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 24.0),
+                          child: ListTile(
+                            selected: menu == "vehicle_type_dashboard",
+                            leading: const Icon(Icons.dashboard_outlined,
+                                size: 20),
+                            title: const Text("Vehicle Type"),
+                            onTap: () {
+                              Navigator.pushReplacementNamed(
+                                  context, '/vehicle_type_dashboard');
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
 
                /* ListTile(

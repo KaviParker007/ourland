@@ -19,6 +19,7 @@ import 'package:ourlandnew/theme/dark_mode.dart';
 
 import 'package:ourlandnew/auth/auth_page.dart';
 import 'package:ourlandnew/pages/vehicles/vehicles_list.dart';
+import 'package:ourlandnew/pages/vehicle_type/vehicle_type_dashboard.dart';
 
 void main() {
   runApp(const MyApp());
@@ -37,6 +38,8 @@ class MyApp extends StatelessWidget {
       routes: {
         "/login_page": (context) => const LoginPage(),
         "/vehicles_list": (context) => const VehiclesList(),
+        "/vehicle_type_dashboard": (context) =>
+            const VehicleTypeDashboardPage(),
         "/zones_list": (context) => const ZonesList(),
         "/shift_list": (context) => const ShiftListPage(),
         "/shift_dashboard": (context) => const ShiftDashboardPage(),
