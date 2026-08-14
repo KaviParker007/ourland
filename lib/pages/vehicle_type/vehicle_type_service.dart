@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ourlandnew/config.dart';
 import 'vehicle_type_models.dart';
+import 'vehicle_type_query.dart';
 
 /// A recoverable project choice surfaced by the 400 responses of #2 / #5.
 class VehicleChoice {
@@ -82,29 +83,6 @@ class VehicleDashboardApi {
     final auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
     return {'Content-Type': 'application/json', 'authorization': auth};
   }
-
-  // ── Query param cleaning ────────────────────────────────────────────────────
-
-  Map<String, String> _clean(Map<String, String?> params) {
-    final out = <String, String>{};
-    params.forEach((k, v) {
-      if (v != null && v.trim().isNotEmpty) out[k] = v.trim();
-    });
-    return out;
-  }
-
-  /// Params for the pivot chain (#1–#3): vehicle_status + vehicle_owner.
-  Map<String, String?> _pivotParams(VehicleFilters f) => {
-        'vehicle_status': f.vehicleStatus,
-        'vehicle_owner': f.vehicleOwner,
-      };
-
-  /// Params for the status chain (#4–#6): vehicle_owner (the vehicle_type filter
-  /// was removed from the UI, so the status chain always groups across all types).
-  Map<String, String?> _statusParams(VehicleFilters f) => {
-        'vehicle_type': 'All',
-        'vehicle_owner': f.vehicleOwner,
-      };
 
   // ── Error handling ──────────────────────────────────────────────────────────
 
@@ -238,7 +216,7 @@ class VehicleDashboardApi {
   ) async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/$path').replace(queryParameters: params);
+      final uri = buildVehicleUri(_baseUrl, path, params);
       final resp = await _get(uri, headers);
       if (resp.statusCode != 200) throw _fromResponse(resp);
       return _decodeList(resp)
@@ -252,29 +230,35 @@ class VehicleDashboardApi {
 
   // ─── Chain A — By Location (vehicle_type pivot) ────────────────────────────────
 
-  /// #1 — Project pivot. Rows = project, columns = vehicle_type (no id).
-  Future<List<VehiclePivotRow>> dashByProject(VehicleFilters f) {
+  /// Screen 1 (#1) — Project pivot. Rows = project, columns = vehicle_type. The
+  /// project level has no id, so [VehiclePivotRow.id] stays null and drilling
+  /// keys off the label.
+  Future<List<VehiclePivotRow>> dashByProject(VehicleQuery q) {
     return _fetchList(
-      'drf_vehicle_dash_by_project/',
-      _clean(_pivotParams(f)),
+      VehicleEndpoints.dashByProject,
+      q.aggregateParams(chain: VehicleChain.location, level: VehicleLevel.project),
       (j) => VehiclePivotRow.fromJson(j, labelKey: 'project'),
     );
   }
 
-  /// #2 — Zone pivot for [project] (required).
-  Future<List<VehiclePivotRow>> dashByZone(String project, VehicleFilters f) {
+  /// Screen 2 (#2) — Zone pivot. [q] must carry `project`.
+  Future<List<VehiclePivotRow>> dashByZone(VehicleQuery q) {
+    assert(q.project != null, 'dashByZone requires a project on the query');
     return _fetchList(
-      'drf_vehicle_dash_by_zone/',
-      _clean({'project': project, ..._pivotParams(f)}),
+      VehicleEndpoints.dashByZone,
+      q.aggregateParams(chain: VehicleChain.location, level: VehicleLevel.zone),
       (j) => VehiclePivotRow.fromJson(j, labelKey: 'zone', idKey: 'zone_id'),
     );
   }
 
-  /// #3 — Ward pivot for [zoneId] (required — never call without it).
-  Future<List<VehiclePivotRow>> dashByWard(int zoneId, VehicleFilters f) {
+  /// Screen 3 (#3) — Ward pivot. [q] must carry `zone_id`; `project` rides along
+  /// so the request matches the documented
+  /// `?zone_id={zone_id}&project={project}` shape.
+  Future<List<VehiclePivotRow>> dashByWard(VehicleQuery q) {
+    assert(q.zoneId != null, 'dashByWard requires a zoneId on the query');
     return _fetchList(
-      'drf_vehicle_dash_by_ward/',
-      _clean({'zone_id': zoneId.toString(), ..._pivotParams(f)}),
+      VehicleEndpoints.dashByWard,
+      q.aggregateParams(chain: VehicleChain.location, level: VehicleLevel.ward),
       (j) => VehiclePivotRow.fromJson(j, labelKey: 'ward', idKey: 'ward_id'),
     );
   }
@@ -282,56 +266,47 @@ class VehicleDashboardApi {
   // ─── Chain B — By Status ───────────────────────────────────────────────────────
 
   /// #4 — Project status buckets.
-  Future<List<VehicleStatusRow>> statusByProject(VehicleFilters f) {
+  Future<List<VehicleStatusRow>> statusByProject(VehicleQuery q) {
     return _fetchList(
-      'drf_project_vehicle_dash_by_status/',
-      _clean(_statusParams(f)),
+      VehicleEndpoints.statusByProject,
+      q.aggregateParams(chain: VehicleChain.status, level: VehicleLevel.project),
       (j) => VehicleStatusRow.fromJson(j, labelKey: 'project', idKey: 'project'),
     );
   }
 
-  /// #5 — Zone status buckets for [project] (required). Includes a trailing
-  /// `zone_id == "Total"` summary row (parsed as [VehicleStatusRow.isTotalRow]).
-  Future<List<VehicleStatusRow>> statusByZone(String project, VehicleFilters f) {
+  /// #5 — Zone status buckets. Includes a trailing `zone_id == "Total"` summary
+  /// row (parsed as [VehicleStatusRow.isTotalRow]).
+  Future<List<VehicleStatusRow>> statusByZone(VehicleQuery q) {
+    assert(q.project != null, 'statusByZone requires a project on the query');
     return _fetchList(
-      'drf_zonal_vehicle_dash_by_status/',
-      _clean({'project': project, ..._statusParams(f)}),
+      VehicleEndpoints.statusByZone,
+      q.aggregateParams(chain: VehicleChain.status, level: VehicleLevel.zone),
       (j) => VehicleStatusRow.fromJson(j, labelKey: 'zone', idKey: 'zone_id'),
     );
   }
 
-  /// #6 — Ward status buckets for [zoneId] (required — never call without it).
-  Future<List<VehicleStatusRow>> statusByWard(int zoneId, VehicleFilters f) {
+  /// #6 — Ward status buckets.
+  Future<List<VehicleStatusRow>> statusByWard(VehicleQuery q) {
+    assert(q.zoneId != null, 'statusByWard requires a zoneId on the query');
     return _fetchList(
-      'drf_ward_vehicle_dash_by_status/',
-      _clean({'zone_id': zoneId.toString(), ..._statusParams(f)}),
+      VehicleEndpoints.statusByWard,
+      q.aggregateParams(chain: VehicleChain.status, level: VehicleLevel.ward),
       (j) => VehicleStatusRow.fromJson(j, labelKey: 'ward', idKey: 'ward_id'),
     );
   }
 
-  // ─── #3b — Terminal vehicle list (both chains) ─────────────────────────────────
+  // ─── Screen 4 (#3b) — Terminal vehicle list (both chains) ──────────────────────
 
-  /// Terminal list. Forwards the deepest location id and the tapped-cell
-  /// selection (vehicle_type for Chain A, vehicle_status for Chain B). Never
-  /// call with all location ids null unless the user chose unassigned vehicles.
-  Future<List<VehicleRecord>> queriedVehicles({
-    int? wardId,
-    int? zoneId,
-    String? project,
-    required String vehicleType,
-    required String vehicleStatus,
-    required String vehicleOwner,
+  /// Terminal list. [q] carries the full accumulated location scope plus the
+  /// selected vehicle type; [statusOverride] lets Chain B forward the tapped
+  /// status bucket in place of the carried `vehicle_status` filter.
+  Future<List<VehicleRecord>> queriedVehicles(
+    VehicleQuery q, {
+    String? statusOverride,
   }) {
     return _fetchList(
-      'drf_list_queried_vehicles/',
-      _clean({
-        'ward_id': wardId?.toString(),
-        'zone_id': zoneId?.toString(),
-        'project': project,
-        'vehicle_type': vehicleType,
-        'vehicle_status': vehicleStatus,
-        'vehicle_owner': vehicleOwner,
-      }),
+      VehicleEndpoints.queriedVehicles,
+      q.vehicleListParams(statusOverride: statusOverride),
       (j) => VehicleRecord.fromJson(j),
     );
   }
@@ -347,7 +322,7 @@ class VehicleDashboardApi {
   }) async {
     try {
       final headers = await _authHeaders();
-      final uri = Uri.parse('$_baseUrl/drf-idle-vehicle-reason/');
+      final uri = buildVehicleUri(_baseUrl, VehicleEndpoints.idleReason, const {});
       final body = jsonEncode({
         'id': vehicleId,
         'reason': reason,

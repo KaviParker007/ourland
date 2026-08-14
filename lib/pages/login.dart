@@ -41,7 +41,9 @@ class _LoginPageState extends State<LoginPage> {
 
 
   void goToHome() {
-    Navigator.pushReplacementNamed(context, '/vehicles_list');
+    // Home is the Vehicle Type Dashboard; the Classic vehicle list is reached
+    // from its drawer (Vehicle → Classic).
+    Navigator.pushReplacementNamed(context, '/vehicle_type_dashboard');
   }
 
   login(data) async {

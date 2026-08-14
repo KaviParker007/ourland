@@ -113,6 +113,54 @@ void main() {
       expect(v.wardCodes, ['TBM-Z1-W01']);
       expect(v.isReasonedToday, 'Driver on leave');
     });
+
+    test('tolerates a completely empty payload without throwing', () {
+      final v = VehicleRecord.fromJson(const {});
+      expect(v.id, 0);
+      expect(v.vehicleNumber, '—');
+      expect(v.wards, isEmpty);
+      expect(v.wardCodes, isEmpty);
+      expect(v.vehicleStatus, '');
+      expect(v.isLocked, isFalse);
+    });
+
+    test('drops unparseable entries from the ward id list', () {
+      final v = VehicleRecord.fromJson({
+        'id': '9',
+        'ward': [75, 'not-an-id', null, 77],
+      });
+      expect(v.id, 9); // numeric strings still coerce
+      expect(v.wards, [75, 77]);
+    });
+  });
+
+  group('VehicleRecord lock state', () {
+    VehicleRecord withReason(Object? raw) =>
+        VehicleRecord.fromJson({'id': 1, 'is_reasoned_today': raw});
+
+    test('null or empty leaves the card unlocked', () {
+      expect(withReason(null).isLocked, isFalse);
+      expect(withReason('').isLocked, isFalse);
+      expect(withReason('   ').isLocked, isFalse);
+    });
+
+    test('reason text locks the card and is exposed for display', () {
+      final v = withReason('Driver on leave');
+      expect(v.isLocked, isTrue);
+      expect(v.idleReasonText, 'Driver on leave');
+    });
+
+    test('a literal boolean locks without inventing reason text', () {
+      // The field is documented as reason-text-or-null, but a backend switch to
+      // a real boolean must not silently unlock every card.
+      final v = withReason(true);
+      expect(v.isLocked, isTrue);
+      expect(v.idleReasonText, isNull);
+
+      final f = withReason(false);
+      expect(f.isLocked, isFalse);
+      expect(f.idleReasonText, isNull);
+    });
   });
 
   group('VehicleStatusBucket mapping', () {

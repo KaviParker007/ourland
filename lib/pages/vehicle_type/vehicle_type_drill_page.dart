@@ -1,13 +1,19 @@
-// ─── Vehicle Type Dashboard — Zone & Ward drill screens ────────────────────────
+// ─── Screens 2 & 3 — Vehicles by Zone / by Ward ────────────────────────────────
 //
-// One generic page for both the zone level (#2/#5) and ward level (#3/#6) of
-// either chain. Renders location rows with tappable type/status cells, a
-// breadcrumb, persisted filters and pull-to-refresh. Zone-level cells drill to
-// the ward level; ward-level cells drill to the terminal vehicle list (#3b).
+// One page serves both aggregate levels of both chains; the only differences are
+// which endpoint is called and what a header tap opens:
+//
+//   Screen 2 (zone level)  header → Screen 3 (wards)   row → Screen 4 (zone+type)
+//   Screen 3 (ward level)  header → Screen 4 (ward)    row → Screen 4 (ward+type)
+//
+// The incoming [VehicleQuery] already carries everything accumulated so far
+// (project, then +zone_id) plus the two global filters, so no screen assembles a
+// query string itself.
 
 import 'package:flutter/material.dart';
 
 import 'vehicle_type_models.dart';
+import 'vehicle_type_query.dart';
 import 'vehicle_type_service.dart';
 import 'vehicle_type_ui.dart';
 import 'queried_vehicles_page.dart';
@@ -18,20 +24,15 @@ class VehicleDrillPage extends StatefulWidget {
   final VehicleChain chain;
   final VehicleDrillLevel level;
 
-  /// Project code (needed for the zone fetch and the breadcrumb).
-  final String project;
-
-  /// Parent zone (required for the ward level).
-  final int? zoneId;
-  final String? zoneCode;
+  /// Scope accumulated by the caller: `project` for the zone level, plus
+  /// `zone_id` / `zoneCode` for the ward level.
+  final VehicleQuery query;
 
   const VehicleDrillPage({
     super.key,
     required this.chain,
     required this.level,
-    required this.project,
-    this.zoneId,
-    this.zoneCode,
+    required this.query,
   });
 
   @override
@@ -47,12 +48,17 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
   String? _error;
   List<VehicleChoice>? _projectChoices; // 400 recovery (zone level only)
 
-  // Project can change if the user recovers from a 400 via the picker.
-  late String _project = widget.project;
+  /// Local copy of the incoming scope. It changes only when the user recovers
+  /// from a 400 via the project picker, or when the global filters change.
+  late VehicleQuery _query = widget.query;
 
-  VehicleFilters get _filters => VehicleDashFilters.instance.filters;
   bool get _isZone => widget.level == VehicleDrillLevel.zone;
   bool get _isLocation => widget.chain == VehicleChain.location;
+
+  /// Filters live in the process-wide holder so they survive back-navigation;
+  /// the query is re-derived from them on every fetch.
+  VehicleFilters get _filters => VehicleDashFilters.instance.filters;
+  VehicleQuery get _liveQuery => _query.withFilters(_filters);
 
   @override
   void initState() {
@@ -67,16 +73,15 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
       _projectChoices = null;
     });
     try {
+      final q = _liveQuery;
       if (_isLocation) {
-        final rows = _isZone
-            ? await _api.dashByZone(_project, _filters)
-            : await _api.dashByWard(widget.zoneId!, _filters);
+        final rows =
+            _isZone ? await _api.dashByZone(q) : await _api.dashByWard(q);
         if (!mounted) return;
         setState(() => _pivotRows = rows);
       } else {
-        final rows = _isZone
-            ? await _api.statusByZone(_project, _filters)
-            : await _api.statusByWard(widget.zoneId!, _filters);
+        final rows =
+            _isZone ? await _api.statusByZone(q) : await _api.statusByWard(q);
         if (!mounted) return;
         setState(() => _statusRows = rows);
       }
@@ -89,6 +94,11 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
           _error = e.message;
         }
       });
+    } catch (_) {
+      // Malformed payloads must not crash the screen.
+      if (mounted) {
+        setState(() => _error = 'Could not read the server response.');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -96,14 +106,11 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
 
   // ── Drill navigation ──────────────────────────────────────────────────────────
 
-  /// Tapping any cell/row. [value] is the tapped vehicle_type (Chain A) or
-  /// vehicle_status (Chain B); 'All' when the row label/total was tapped.
-  void _onCellTap(int? id, String label, String value) {
+  /// Group header tapped. At the zone level this opens the wards of that zone;
+  /// at the ward level it opens every vehicle in that ward (vehicle_type=All).
+  void _onHeaderTap(int? id, String label) {
     if (_isZone) {
-      // Drill to the ward level. Intermediate endpoints (#3/#6) do not accept
-      // the cell value, so it is not forwarded here — it is applied only at the
-      // terminal via the ward-level tap below.
-      if (id == null) return; // shouldn't happen for real zones
+      if (id == null) return; // a zone with no id cannot be drilled
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -111,40 +118,38 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
           builder: (_) => VehicleDrillPage(
             chain: widget.chain,
             level: VehicleDrillLevel.ward,
-            project: _project,
-            zoneId: id,
-            zoneCode: label,
+            query: _liveQuery.drillToWards(zoneId: id, zoneCode: label),
           ),
         ),
       ).then((_) => _fetch());
-    } else {
-      _openTerminal(wardId: id, wardLabel: label, cellValue: value);
+      return;
     }
+    _openVehicles(rowId: id, rowLabel: label, cellValue: kAllFilterValue);
   }
 
-  void _openTerminal({
-    required int? wardId,
-    required String wardLabel,
+  /// A type (Chain A) or status (Chain B) row was tapped → Screen 4, narrowed.
+  void _onRowTap(int? id, String label, String cellValue) =>
+      _openVehicles(rowId: id, rowLabel: label, cellValue: cellValue);
+
+  void _openVehicles({
+    required int? rowId,
+    required String rowLabel,
     required String cellValue,
   }) {
-    // Map the tapped cell + persisted filters to the terminal query.
-    final String vehicleType;
-    final String vehicleStatus;
-    String? note;
-    if (_isLocation) {
-      vehicleType = cellValue; // 'All' or a specific type
-      vehicleStatus = _filters.vehicleStatus;
-    } else {
-      vehicleStatus = cellValue; // 'All' or a mapped status
-      vehicleType = 'All'; // vehicle_type filter removed from the UI
+    // The tapped group joins the scope: on Screen 2 it is a zone, on Screen 3 a
+    // ward (whose zone is already in _liveQuery).
+    var query = _isZone
+        ? _liveQuery.copyWith(zoneId: rowId, zoneCode: rowLabel)
+        : _liveQuery.withWard(wardId: rowId, wardCode: rowLabel);
 
-      // Idle discrepancy: the status-chain `idle` bucket excludes never-operated
-      // vehicles, but vehicle_status=Idle includes them, so the list is a
-      // superset of the tapped count.
-      if (cellValue == 'Idle') {
-        note = 'This list uses vehicle_status=Idle, which also includes '
-            'never-operated vehicles — so it may show more than the Idle count.';
-      }
+    // Chain A narrows by vehicle_type; Chain B forwards the tapped status bucket
+    // as an override and leaves vehicle_type at All.
+    final String? statusOverride;
+    if (_isLocation) {
+      query = query.withType(cellValue);
+      statusOverride = null;
+    } else {
+      statusOverride = cellValue;
     }
 
     Navigator.push(
@@ -152,35 +157,24 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
       MaterialPageRoute(
         settings: const RouteSettings(name: kVtVehiclesRoute),
         builder: (_) => QueriedVehiclesPage(
-          title: wardLabel,
-          crumbs: [
-            const VehicleCrumb('Projects', routeName: kVtDashboardRoute),
-            VehicleCrumb(_project, routeName: kVtZoneRoute),
-            VehicleCrumb(widget.zoneCode ?? 'Zone', routeName: kVtWardRoute),
-            VehicleCrumb(wardLabel),
-          ],
-          // Forward the full location context (matches the documented request
-          // ?ward_id=..&zone_id=..&project=..), not just the deepest id.
-          wardId: wardId,
-          zoneId: widget.zoneId,
-          project: _project,
-          vehicleType: vehicleType,
-          vehicleStatus: vehicleStatus,
-          vehicleOwner: _filters.vehicleOwner,
-          note: note,
+          title: rowLabel,
+          query: query,
+          statusOverride: statusOverride,
+          crumbs: _terminalCrumbs(rowLabel),
+          note: _isLocation ? null : idleSupersetNote(cellValue),
         ),
       ),
     ).then((_) => _fetch());
   }
 
-  // ── Filters ─────────────────────────────────────────────────────────────────
+  // ── Filters ───────────────────────────────────────────────────────────────────
 
   Future<void> _openFilters() async {
     final updated = await showVehicleFilterSheet(context, _filters);
-    if (updated != null) {
-      VehicleDashFilters.instance.filters = updated;
-      _fetch();
-    }
+    if (updated == null || updated == _filters) return;
+    VehicleDashFilters.instance.filters = updated;
+    // Re-fetch this screen only — the navigation stack is left untouched.
+    _fetch();
   }
 
   void _clearFilter(VehicleFilters cleared) {
@@ -190,27 +184,48 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
 
   // ── Build ─────────────────────────────────────────────────────────────────────
 
+  String get _projectLabel => _query.project ?? 'Project';
+  String get _zoneLabel => _query.zoneCode ?? 'Zone';
+
   List<VehicleCrumb> get _crumbs {
     if (_isZone) {
       return [
         const VehicleCrumb('Projects', routeName: kVtDashboardRoute),
-        VehicleCrumb(_project),
+        VehicleCrumb(_projectLabel),
       ];
     }
     return [
       const VehicleCrumb('Projects', routeName: kVtDashboardRoute),
-      VehicleCrumb(_project, routeName: kVtZoneRoute),
-      VehicleCrumb(widget.zoneCode ?? 'Zone'),
+      VehicleCrumb(_projectLabel, routeName: kVtZoneRoute),
+      VehicleCrumb(_zoneLabel),
+    ];
+  }
+
+  List<VehicleCrumb> _terminalCrumbs(String rowLabel) {
+    if (_isZone) {
+      return [
+        const VehicleCrumb('Projects', routeName: kVtDashboardRoute),
+        VehicleCrumb(_projectLabel, routeName: kVtZoneRoute),
+        VehicleCrumb(rowLabel),
+      ];
+    }
+    return [
+      const VehicleCrumb('Projects', routeName: kVtDashboardRoute),
+      VehicleCrumb(_projectLabel, routeName: kVtZoneRoute),
+      VehicleCrumb(_zoneLabel, routeName: kVtWardRoute),
+      VehicleCrumb(rowLabel),
     ];
   }
 
   @override
   Widget build(BuildContext context) {
-    final title = _isZone ? _project : (widget.zoneCode ?? 'Zone');
+    // Screen 2 titles with the project; Screen 3 with project and zone.
+    final title = _isZone ? _projectLabel : '$_projectLabel › $_zoneLabel';
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         title: Text(title,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -227,7 +242,11 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
       body: Column(
         children: [
           VehicleBreadcrumb(crumbs: _crumbs),
-          VehicleFilterChips(filters: _filters, onClear: _clearFilter),
+          VehicleFilterBar(
+            filters: _filters,
+            onClear: _clearFilter,
+            onEdit: _openFilters,
+          ),
           Expanded(child: _buildBody()),
         ],
       ),
@@ -241,7 +260,7 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
         message: 'Select a project to continue.',
         choices: _projectChoices!,
         onPick: (c) {
-          setState(() => _project = c.value);
+          setState(() => _query = _query.withProject(c.value));
           _fetch();
         },
       );
@@ -250,43 +269,55 @@ class _VehicleDrillPageState extends State<VehicleDrillPage> {
 
     final isEmpty = _isLocation ? _pivotRows.isEmpty : _statusRows.isEmpty;
     if (isEmpty) {
-      return VehicleEmpty(
-        message: _isZone ? 'No zones found' : 'No wards found',
-        hint: 'No data for this selection and filters.',
-        icon: Icons.inbox_outlined,
+      return RefreshIndicator(
+        onRefresh: _fetch,
+        child: VehicleEmptyScrollable(
+          message: 'No vehicles match these filters',
+          hint: _isZone
+              ? 'No zones with vehicles in $_projectLabel.'
+              : 'No wards with vehicles in $_zoneLabel.',
+          icon: Icons.inbox_outlined,
+        ),
       );
     }
 
+    final count = _isLocation ? _pivotRows.length : _statusRows.length;
+    final types = _isLocation ? unionVehicleTypes(_pivotRows) : const <String>[];
+    final headerNoun = _isZone ? 'wards' : 'vehicles';
+
     return RefreshIndicator(
       onRefresh: _fetch,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-        children: _isLocation ? _pivotCards() : _statusCards(),
+      child: CustomScrollView(
+        slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+            sliver: SliverList.builder(
+              itemCount: count,
+              itemBuilder: (context, index) {
+                if (_isLocation) {
+                  final row = _pivotRows[index];
+                  return buildPivotSection(
+                    context: context,
+                    row: row,
+                    typeColumns: types,
+                    headerTargetNoun: headerNoun,
+                    onHeaderTap: () => _onHeaderTap(row.id, row.label),
+                    onTypeTap: (type) => _onRowTap(row.id, row.label, type),
+                  );
+                }
+                final row = _statusRows[index];
+                return buildStatusSection(
+                  context: context,
+                  row: row,
+                  headerTargetNoun: headerNoun,
+                  onHeaderTap: () => _onHeaderTap(row.id, row.label),
+                  onStatusTap: (status) => _onRowTap(row.id, row.label, status),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
-  }
-
-  List<Widget> _pivotCards() {
-    final types = unionVehicleTypes(_pivotRows);
-    return [
-      for (final row in _pivotRows)
-        buildPivotCard(
-          context: context,
-          row: row,
-          typeColumns: types,
-          onDrill: (v) => _onCellTap(row.id, row.label, v),
-        ),
-    ];
-  }
-
-  List<Widget> _statusCards() {
-    return [
-      for (final row in _statusRows)
-        buildStatusCard(
-          context: context,
-          row: row,
-          onDrill: (v) => _onCellTap(row.id, row.label, v),
-        ),
-    ];
   }
 }

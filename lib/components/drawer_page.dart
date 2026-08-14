@@ -24,8 +24,16 @@ class _AppDrawerState extends State<AppDrawer> {
 
   void getMenu() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final current = prefs.getString("menu");
     setState(() {
-      menu = prefs.getString("menu");
+      menu = current;
+      // The Vehicle Type Dashboard is the app's home, so the Vehicle group is
+      // seeded open whenever the user is on one of its screens — otherwise
+      // "Classic" would sit hidden behind a collapsed group on the very first
+      // screen they see. Tapping the group still toggles it from here.
+      isVehicleExpanded =
+          current == "vehicles" || current == "vehicle_type_dashboard";
     });
   }
 

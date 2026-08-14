@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ourlandnew/pages/login.dart';
 
-import 'package:ourlandnew/pages/vehicles/vehicles_list.dart';
+import 'package:ourlandnew/pages/vehicle_type/vehicle_type_dashboard.dart';
 
 class AuthPage extends StatefulWidget {
   const AuthPage({super.key});
@@ -59,8 +59,12 @@ class _AuthPageState extends State<AuthPage> {
         ),
       );
     } else {
-      // Show appropriate screen based on login status
-      return isLoggedIn! ? const VehiclesList() : const LoginPage();
+      // Show appropriate screen based on login status. The Vehicle Type
+      // Dashboard is the app's home; the Classic vehicle list is reached from
+      // its drawer (Vehicle → Classic).
+      return isLoggedIn!
+          ? const VehicleTypeDashboardPage()
+          : const LoginPage();
     }
   }
 }

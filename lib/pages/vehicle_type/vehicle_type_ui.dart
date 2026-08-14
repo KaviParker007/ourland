@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 
 import 'vehicle_type_models.dart';
+import 'vehicle_type_query.dart';
 import 'vehicle_type_service.dart';
 
 // Route names used by the breadcrumb to pop back to a specific drill level.
@@ -177,6 +178,44 @@ class VehicleEmpty extends StatelessWidget {
   }
 }
 
+/// [VehicleEmpty] hosted in an always-scrollable viewport so a wrapping
+/// `RefreshIndicator` still responds to a pull — otherwise the empty state is the
+/// one place the user cannot refresh out of.
+class VehicleEmptyScrollable extends StatelessWidget {
+  final String message;
+  final String? hint;
+  final IconData icon;
+  const VehicleEmptyScrollable({
+    super.key,
+    required this.message,
+    this.hint,
+    this.icon = Icons.inbox_outlined,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: VehicleEmpty(message: message, hint: hint, icon: icon),
+        ),
+      ),
+    );
+  }
+}
+
+/// Advisory shown on Screen 4 when the user arrived by tapping Chain B's `idle`
+/// bucket: that bucket excludes never-operated vehicles but `vehicle_status=Idle`
+/// includes them, so the list is a superset of the tapped count. Returns null for
+/// every other cell.
+String? idleSupersetNote(String cellValue) {
+  if (cellValue != 'Idle') return null;
+  return 'This list uses vehicle_status=Idle, which also includes '
+      'never-operated vehicles — so it may show more than the Idle count.';
+}
+
 /// Recoverable picker shown when #2/#5 return 400 with `project_choices`.
 class VehicleProjectPicker extends StatelessWidget {
   final String message;
@@ -268,8 +307,13 @@ class VehicleBreadcrumb extends StatelessWidget {
               GestureDetector(
                 onTap: crumbs[i].routeName == null
                     ? null
-                    : () => Navigator.of(context).popUntil(
-                        (r) => r.settings.name == crumbs[i].routeName),
+                    // `r.isFirst` is a required backstop, not belt-and-braces:
+                    // the dashboard is the app's launch screen, where it is the
+                    // root route named '/' rather than kVtDashboardRoute. Without
+                    // it this predicate would never match and popUntil would pop
+                    // every route, leaving a blank app.
+                    : () => Navigator.of(context).popUntil((r) =>
+                        r.settings.name == crumbs[i].routeName || r.isFirst),
                 child: Text(
                   crumbs[i].label,
                   style: TextStyle(
@@ -291,40 +335,101 @@ class VehicleBreadcrumb extends StatelessWidget {
   }
 }
 
-// ── Active-filter chips ─────────────────────────────────────────────────────────
+// ── Filter bar ──────────────────────────────────────────────────────────────────
 
-class VehicleFilterChips extends StatelessWidget {
+/// The always-present filter summary shown under the app bar on Screens 1–4.
+///
+/// Non-default filters render as deletable chips; when both are at `All` a muted
+/// subtitle states so, which keeps the "the user always knows what they are
+/// looking at" requirement true even in the default state. The filter *editor*
+/// itself is the app-bar `filter_alt` action → [showVehicleFilterSheet], which is
+/// the convention every other dashboard in this app already uses.
+class VehicleFilterBar extends StatelessWidget {
   final VehicleFilters filters;
+
+  /// Receives the filters with one facet reset back to `All`.
   final void Function(VehicleFilters cleared) onClear;
-  const VehicleFilterChips({
+
+  /// Opens the filter sheet — wired to the subtitle so the default state is
+  /// still a 48 dp tap target rather than dead text.
+  final VoidCallback? onEdit;
+
+  const VehicleFilterBar({
     super.key,
     required this.filters,
     required this.onClear,
+    this.onEdit,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (!filters.hasActive) return const SizedBox.shrink();
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+
+    if (!filters.hasActive) {
+      return Semantics(
+        label: 'Filters: all statuses, all owners. Double tap to change filters.',
+        button: onEdit != null,
+        child: InkWell(
+          onTap: onEdit,
+          child: Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 40),
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+            alignment: Alignment.centerLeft,
+            child: ExcludeSemantics(
+              child: Row(
+                children: [
+                  Icon(Icons.tune_rounded,
+                      size: 14, color: onSurface.withAlpha(110)),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'All statuses · All owners',
+                      style: TextStyle(
+                          fontSize: 12, color: onSurface.withAlpha(130)),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     final chips = <Widget>[];
-    void add(String label, VehicleFilters cleared) {
+    void add(String label, String semantic, VehicleFilters cleared) {
       chips.add(Padding(
         padding: const EdgeInsets.only(right: 8),
-        child: Chip(
-          label: Text(label, style: const TextStyle(fontSize: 12)),
-          onDeleted: () => onClear(cleared),
-          visualDensity: VisualDensity.compact,
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        child: Semantics(
+          label: semantic,
+          child: Chip(
+            label: Text(label, style: const TextStyle(fontSize: 12)),
+            onDeleted: () => onClear(cleared),
+            deleteButtonTooltipMessage: 'Clear $semantic',
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
         ),
       ));
     }
 
-    if (filters.vehicleStatus != 'All') {
-      add('Status: ${filters.vehicleStatus}',
-          filters.copyWith(vehicleStatus: 'All'));
+    if (filters.vehicleStatus != kAllFilterValue) {
+      add(
+        'Status: ${filters.vehicleStatus}',
+        'status filter ${filters.vehicleStatus}',
+        filters.copyWith(vehicleStatus: kAllFilterValue),
+      );
     }
-    if (filters.vehicleOwner != 'All') {
-      add('Owner: ${kVehicleOwnerLabels[filters.vehicleOwner] ?? filters.vehicleOwner}',
-          filters.copyWith(vehicleOwner: 'All'));
+    if (filters.vehicleOwner != kAllFilterValue) {
+      final label =
+          kVehicleOwnerLabels[filters.vehicleOwner] ?? filters.vehicleOwner;
+      add(
+        'Owner: $label',
+        'owner filter $label',
+        filters.copyWith(vehicleOwner: kAllFilterValue),
+      );
     }
 
     return Container(
@@ -455,8 +560,12 @@ class _FilterSheetState extends State<_FilterSheet> {
     ValueChanged<String> onChanged, {
     String Function(String)? labelFor,
   }) {
+    // `initialValue` is applied once (FormFieldState does not re-apply it on
+    // rebuild), which is correct here: the dropdown owns its displayed value
+    // after the first build and [value] is only ever changed by its own
+    // onChanged, so the two never diverge.
     return DropdownButtonFormField<String>(
-      value: value,
+      initialValue: value,
       isExpanded: true,
       decoration: InputDecoration(
         labelText: label,
@@ -479,16 +588,22 @@ class _FilterSheetState extends State<_FilterSheet> {
   }
 }
 
-// ── Row card (shared by pivot & status levels) ──────────────────────────────────
+// ── Group section (header + one count row per type/status) ──────────────────────
 
-class VehicleCellChip {
+/// Minimum tap-target height, per the accessibility requirement.
+const double kVehicleMinTapTarget = 48;
+
+/// Data for one `label → count` line inside a [GroupSection].
+@immutable
+class CountRowData {
   final String label;
   final int count;
   final Color color;
 
-  /// Null when the cell is 0 → de-emphasised and non-tappable.
+  /// Null → the row is not actionable (count is 0, or the group is a footer).
   final VoidCallback? onTap;
-  const VehicleCellChip({
+
+  const CountRowData({
     required this.label,
     required this.count,
     required this.color,
@@ -496,181 +611,266 @@ class VehicleCellChip {
   });
 }
 
-class VehicleRowCard extends StatelessWidget {
-  final String label;
+/// One `EMV    16 ›` line. Tapping opens the vehicle list narrowed to this
+/// label; a zero count is de-emphasised and inert.
+class TypeCountRow extends StatelessWidget {
+  final CountRowData data;
+
+  /// Named in the semantic label so screen-reader users get
+  /// "MDU, EMV, 16 vehicles" rather than a bare "EMV, 16".
+  final String groupLabel;
+
+  const TypeCountRow({
+    super.key,
+    required this.data,
+    required this.groupLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    final active = data.onTap != null && data.count > 0;
+    final fg = active ? onSurface : onSurface.withAlpha(90);
+
+    return Semantics(
+      button: active,
+      enabled: active,
+      label: '$groupLabel, ${data.label}, ${data.count} '
+          '${data.count == 1 ? 'vehicle' : 'vehicles'}',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: active ? data.onTap : null,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: kVehicleMinTapTarget),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: active ? data.color : data.color.withAlpha(70),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    data.label,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: fg),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${data.count}',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                    color: active ? data.color : onSurface.withAlpha(80),
+                  ),
+                ),
+                SizedBox(
+                  width: 22,
+                  child: active
+                      ? Icon(Icons.chevron_right_rounded,
+                          size: 18, color: onSurface.withAlpha(110))
+                      : null,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A project / zone / ward group: a tappable header carrying the group total,
+/// followed by one [TypeCountRow] per vehicle type (Chain A) or status bucket
+/// (Chain B).
+///
+/// The header drills to the next aggregate level (or, at ward level, straight to
+/// the vehicle list); each row drills to the vehicle list narrowed to that label.
+class GroupSection extends StatelessWidget {
+  final String title;
   final int total;
   final Color accent;
-  final List<VehicleCellChip> chips;
+  final List<CountRowData> rows;
 
-  /// Drill by the whole row (vehicle_type=All / vehicle_status=All).
-  final VoidCallback onRowTap;
+  /// Null → the header is inert (used for Chain B's pinned `Total` footer).
+  final VoidCallback? onHeaderTap;
 
-  /// Shown when the row drills to a deeper level (hidden for the Total footer).
-  final bool showChevron;
+  /// What the header opens, spoken to screen readers ("zones", "vehicles", …).
+  final String headerTargetNoun;
 
-  const VehicleRowCard({
+  const GroupSection({
     super.key,
-    required this.label,
+    required this.title,
     required this.total,
     required this.accent,
-    required this.chips,
-    required this.onRowTap,
-    this.showChevron = true,
+    required this.rows,
+    required this.onHeaderTap,
+    this.headerTargetNoun = 'details',
   });
 
   @override
   Widget build(BuildContext context) {
     final onSurface = Theme.of(context).colorScheme.onSurface;
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       clipBehavior: Clip.antiAlias,
       elevation: 3,
-      child: InkWell(
-        onTap: onRowTap,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border(left: BorderSide(color: accent, width: 4)),
-          ),
-          padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                          letterSpacing: 0.3),
-                    ),
-                  ),
-                  // Total badge (row-level drill = All).
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: accent.withAlpha(28),
-                      borderRadius: BorderRadius.circular(20),
-                      border:
-                          Border.all(color: accent.withAlpha(110), width: 1.2),
-                    ),
-                    child: Text('$total',
-                        style: TextStyle(
-                            color: accent,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14)),
-                  ),
-                  if (showChevron)
-                    Icon(Icons.chevron_right_rounded,
-                        size: 22, color: onSurface.withAlpha(120)),
-                ],
-              ),
-              if (chips.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: chips.map(_buildChip).toList(),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildChip(VehicleCellChip chip) {
-    final active = chip.onTap != null && chip.count > 0;
-    final fg = active ? chip.color : chip.color.withAlpha(110);
-    return GestureDetector(
-      onTap: active ? chip.onTap : null,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
         decoration: BoxDecoration(
-          color: chip.color.withAlpha(active ? 24 : 10),
-          borderRadius: BorderRadius.circular(16),
-          border:
-              Border.all(color: chip.color.withAlpha(active ? 90 : 40), width: 1),
+          border: Border(left: BorderSide(color: accent, width: 4)),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              width: 7,
-              height: 7,
-              margin: const EdgeInsets.only(right: 5),
-              decoration: BoxDecoration(color: fg, shape: BoxShape.circle),
-            ),
-            Text('${chip.label}  ${chip.count}',
-                style: TextStyle(
-                    color: fg, fontSize: 11.5, fontWeight: FontWeight.w600)),
+            _header(context, onSurface),
+            if (rows.isNotEmpty)
+              Divider(height: 1, thickness: 1, color: onSurface.withAlpha(20)),
+            for (var i = 0; i < rows.length; i++) ...[
+              if (i > 0)
+                Divider(
+                  height: 1,
+                  thickness: 1,
+                  indent: 14,
+                  endIndent: 14,
+                  color: onSurface.withAlpha(12),
+                ),
+              TypeCountRow(data: rows[i], groupLabel: title),
+            ],
           ],
         ),
       ),
     );
   }
+
+  Widget _header(BuildContext context, Color onSurface) {
+    final tappable = onHeaderTap != null;
+    return Semantics(
+      header: true,
+      button: tappable,
+      enabled: tappable,
+      label: '$title, $total ${total == 1 ? 'vehicle' : 'vehicles'}'
+          '${tappable ? '. Double tap to view $headerTargetNoun.' : ''}',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onHeaderTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: kVehicleMinTapTarget),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        letterSpacing: 0.3),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: accent.withAlpha(28),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: accent.withAlpha(110), width: 1.2),
+                  ),
+                  child: Text(
+                    '$total',
+                    style: TextStyle(
+                      color: accent,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 26,
+                  child: tappable
+                      ? Icon(Icons.chevron_right_rounded,
+                          size: 22, color: onSurface.withAlpha(120))
+                      : null,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-// ── Row-card builders (shared by dashboard & drill screens) ────────────────────
+// ── Section builders (shared by dashboard & drill screens) ──────────────────────
 
-/// Builds a pivot (Chain A) row card. [onDrill] receives the tapped vehicle_type
-/// ('All' when the row label/total is tapped).
-Widget buildPivotCard({
+/// Chain A section. [onHeaderTap] drills to the next level (or the vehicle list
+/// at ward level); [onTypeTap] opens the vehicle list for one vehicle type.
+Widget buildPivotSection({
   required BuildContext context,
   required VehiclePivotRow row,
   required List<String> typeColumns,
-  required void Function(String vehicleType) onDrill,
+  required VoidCallback? onHeaderTap,
+  required void Function(String vehicleType) onTypeTap,
+  String headerTargetNoun = 'details',
 }) {
-  final primary = Theme.of(context).colorScheme.primary;
-  final chips = [
-    for (final t in typeColumns)
-      VehicleCellChip(
-        label: t,
-        count: row.count(t),
-        color: vehicleTypeColor(t),
-        onTap: row.count(t) > 0 ? () => onDrill(t) : null,
-      ),
-  ];
-  return VehicleRowCard(
-    label: row.label,
+  return GroupSection(
+    title: row.label,
     total: row.total,
-    accent: primary,
-    chips: chips,
-    onRowTap: () => onDrill('All'),
+    accent: Theme.of(context).colorScheme.primary,
+    onHeaderTap: onHeaderTap,
+    headerTargetNoun: headerTargetNoun,
+    rows: [
+      for (final t in typeColumns)
+        CountRowData(
+          label: t,
+          count: row.count(t),
+          color: vehicleTypeColor(t),
+          onTap: row.count(t) > 0 ? () => onTypeTap(t) : null,
+        ),
+    ],
   );
 }
 
-/// Builds a status (Chain B) row card. [onDrill] receives the vehicle_status
-/// value ('All' when the row label/total is tapped). The Total footer row of #5
-/// is rendered non-tappable.
-Widget buildStatusCard({
+/// Chain B section. The trailing `Total` footer row of #5 is rendered inert.
+Widget buildStatusSection({
   required BuildContext context,
   required VehicleStatusRow row,
-  required void Function(String vehicleStatus) onDrill,
+  required VoidCallback? onHeaderTap,
+  required void Function(String vehicleStatus) onStatusTap,
+  String headerTargetNoun = 'details',
 }) {
-  final primary = Theme.of(context).colorScheme.primary;
   final isFooter = row.isTotalRow;
-  final chips = [
-    for (final b in kStatusColumns)
-      VehicleCellChip(
-        label: b.label,
-        count: row.bucket(b),
-        color: statusBucketColor(b),
-        onTap: (!isFooter && row.bucket(b) > 0)
-            ? () => onDrill(b.vehicleStatusValue)
-            : null,
-      ),
-  ];
-  return VehicleRowCard(
-    label: isFooter ? 'Total' : row.label,
+  return GroupSection(
+    title: isFooter ? 'Total' : row.label,
     total: row.total,
-    accent: isFooter ? const Color(0xFF78909C) : primary,
-    chips: chips,
-    onRowTap: isFooter ? () {} : () => onDrill('All'),
-    showChevron: !isFooter,
+    accent: isFooter
+        ? const Color(0xFF78909C)
+        : Theme.of(context).colorScheme.primary,
+    onHeaderTap: isFooter ? null : onHeaderTap,
+    headerTargetNoun: headerTargetNoun,
+    rows: [
+      for (final b in kStatusColumns)
+        CountRowData(
+          label: b.label,
+          count: row.bucket(b),
+          color: statusBucketColor(b),
+          onTap: (!isFooter && row.bucket(b) > 0)
+              ? () => onStatusTap(b.vehicleStatusValue)
+              : null,
+        ),
+    ],
   );
 }

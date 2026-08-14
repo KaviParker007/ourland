@@ -195,6 +195,21 @@ class VehicleFilters {
       vehicleOwner: vehicleOwner ?? this.vehicleOwner,
     );
   }
+
+  // Value equality — VehicleQuery compares filters to decide whether a re-fetch
+  // is actually needed.
+  @override
+  bool operator ==(Object other) =>
+      other is VehicleFilters &&
+      other.vehicleStatus == vehicleStatus &&
+      other.vehicleOwner == vehicleOwner;
+
+  @override
+  int get hashCode => Object.hash(vehicleStatus, vehicleOwner);
+
+  @override
+  String toString() =>
+      'VehicleFilters(status: $vehicleStatus, owner: $vehicleOwner)';
 }
 
 /// Process-wide holder so filters set in the sheet persist across every screen
@@ -360,6 +375,10 @@ class VehicleRecord {
   final String vehicleStatus;
 
   /// Idle-reason text logged today, or null.
+  ///
+  /// ⚠️ Despite the `is_…` name this is **not** a boolean: the API returns the
+  /// reason *text* when one was logged today and `null` otherwise. Read
+  /// [isLocked] rather than comparing this to `true`.
   final String? isReasonedToday;
 
   const VehicleRecord({
@@ -374,6 +393,26 @@ class VehicleRecord {
     this.vehicleStatus = '',
     this.isReasonedToday,
   });
+
+  /// True when a reason has already been logged today, which **locks** the card
+  /// on Screen 4: it is marked with a lock pill and its idle-reason action is
+  /// withheld, because a second reason for the same day would be rejected.
+  ///
+  /// Tolerates the two shapes the field has been seen in — reason text, and a
+  /// literal boolean `true` (parsed by [_asStringOrNull] into `'true'`) — so a
+  /// backend change to a real boolean cannot silently unlock every card.
+  bool get isLocked {
+    final raw = isReasonedToday;
+    if (raw == null || raw.isEmpty) return false;
+    return raw.toLowerCase() != 'false';
+  }
+
+  /// The reason text to display, or null when the lock came from a bare boolean.
+  String? get idleReasonText {
+    if (!isLocked) return null;
+    final raw = isReasonedToday!;
+    return raw.toLowerCase() == 'true' ? null : raw;
+  }
 
   factory VehicleRecord.fromJson(Map<String, dynamic> json) {
     List<int> intList(Object? v) {
