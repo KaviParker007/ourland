@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ourlandnew/models/bin_record.dart';
 import 'package:ourlandnew/pages/bins/bin_models.dart';
 import 'package:ourlandnew/pages/bins/bin_query.dart';
+import 'package:ourlandnew/pages/bins/bin_status.dart';
 import 'package:ourlandnew/services/dash_api.dart';
 
 const String _host = 'https://ourlander.in';
@@ -20,9 +21,13 @@ String render(String path, Map<String, String> params) {
 
 void main() {
   group('encodeBinFilter', () {
-    test('sends "All" literally while kOmitBinAllValues is false', () {
-      expect(kOmitBinAllValues, isFalse);
-      expect(encodeBinFilter('All'), 'All');
+    test('omits "All" so only chosen parameters are sent', () {
+      // These are optional params that default to All server-side, and the
+      // contract's worked example sends no bin_owner at all.
+      expect(kOmitBinAllValues, isTrue);
+      expect(encodeBinFilter('All'), isNull);
+      expect(encodeBinFilter('all'), isNull);
+      expect(encodeBinFilter('Dumper'), 'Dumper');
     });
 
     test('drops null and blank values', () {
@@ -53,8 +58,7 @@ void main() {
       final q = const BinQuery().drillToZones('MDU').withType('Dumper');
       expect(
         render(BinEndpoints.listQueriedBins, q.binListParams()),
-        '/bins/drf_list_queried_bins/'
-        '?project=MDU&bin_type=Dumper&bin_status=All&bin_owner=All',
+        '/bins/drf_list_queried_bins/?project=MDU&bin_type=Dumper',
       );
     });
   });
@@ -90,9 +94,7 @@ void main() {
           .withType('Compactor');
       expect(
         render(BinEndpoints.listQueriedBins, q.binListParams()),
-        '/bins/drf_list_queried_bins/'
-        '?project=MDU&zone_id=11&bin_type=Compactor'
-        '&bin_status=All&bin_owner=All',
+        '/bins/drf_list_queried_bins/?project=MDU&zone_id=11&bin_type=Compactor',
       );
     });
   });
@@ -106,9 +108,7 @@ void main() {
     test('a ward header lists every bin type in that ward', () {
       expect(
         render(BinEndpoints.listQueriedBins, ward.binListParams()),
-        '/bins/drf_list_queried_bins/'
-        '?project=MDU&zone_id=11&ward_id=84&bin_type=All'
-        '&bin_status=All&bin_owner=All',
+        '/bins/drf_list_queried_bins/?project=MDU&zone_id=11&ward_id=84',
       );
     });
 
@@ -198,7 +198,7 @@ void main() {
       expect(row.count('Compactor'), 789);
       expect(row.count('Dumper'), 64);
       expect(row.total, 853);
-      expect(row.captionFor('Compactor'), '12hr 789');
+      expect(row.captionFor('Compactor'), '12 hr 789');
     });
 
     test('sums multiple buckets and lists them in the caption', () {
@@ -212,7 +212,7 @@ void main() {
         idKey: 'zone_id',
       );
       expect(row.count('Compactor'), 15);
-      expect(row.captionFor('Compactor'), '12hr 10 · 24hr 5');
+      expect(row.captionFor('Compactor'), '12 hr 10 · 24 hr 5');
       expect(row.id, 11);
       expect(row.isUnassigned, isFalse);
     });
@@ -350,6 +350,186 @@ void main() {
           {'id': 1, 'latitude': 'N/A', 'longitude': '80.24'});
       expect(r.hasLocation, isFalse);
       expect(r.coordinates, isNull);
+    });
+  });
+
+  // ── The headline requirement ─────────────────────────────────────────────────
+
+  group('Project → Bin Type → Bin Status → Bin List', () {
+    test('MDU → Compactor → Collected in 12hr produces the exact URL', () {
+      final q = const BinQuery()
+          .drillToZones('MDU')
+          .withType('Compactor')
+          .withStatus('Collected in 12hr');
+
+      final uri =
+          buildApiUri(_host, BinEndpoints.listQueriedBins, q.binListParams());
+
+      // Spaces percent-encoded as %20, and no parameter the user did not choose.
+      expect(
+        uri.toString(),
+        '$_host/bins/drf_list_queried_bins/'
+        '?project=MDU&bin_type=Compactor'
+        '&bin_status=Collected%20in%2012hr',
+      );
+      // And it round-trips back to the canonical value the API expects.
+      expect(uri.queryParameters['bin_status'], 'Collected in 12hr');
+      expect(uri.queryParameters['bin_type'], 'Compactor');
+      expect(uri.queryParameters['project'], 'MDU');
+      expect(uri.queryParameters.containsKey('bin_owner'), isFalse);
+    });
+
+    test('every canonical status survives encoding and decoding', () {
+      for (final status in kBinStatuses) {
+        final q = const BinQuery().drillToZones('MDU').withStatus(status);
+        final uri =
+            buildApiUri(_host, BinEndpoints.listQueriedBins, q.binListParams());
+        expect(uri.query.contains('+'), isFalse,
+            reason: 'spaces must be %20, not + ($status)');
+        expect(uri.queryParameters['bin_status'], status);
+      }
+    });
+
+    test('the full drill carries zone and ward alongside type and status', () {
+      final q = const BinQuery()
+          .drillToZones('MDU')
+          .drillToWards(zoneId: 11, zoneCode: 'MDU-Z5')
+          .withWard(wardId: 84, wardCode: 'MDU-Z5-W84')
+          .withType('Dumper')
+          .withStatus('Yet to collect');
+
+      final uri =
+          buildApiUri(_host, BinEndpoints.listQueriedBins, q.binListParams());
+      expect(uri.queryParameters, {
+        'project': 'MDU',
+        'zone_id': '11',
+        'ward_id': '84',
+        'bin_type': 'Dumper',
+        'bin_status': 'Yet to collect',
+      });
+    });
+
+    test('bin_owner is sent only once actually chosen', () {
+      final without = const BinQuery().drillToZones('MDU');
+      expect(without.binListParams().containsKey('bin_owner'), isFalse);
+
+      final chosen = without
+          .withFilters(without.filters.copyWith(binOwner: 'Corporation'));
+      expect(chosen.binListParams()['bin_owner'], 'Corporation');
+    });
+
+    test('describeScope reports type and status', () {
+      final q = const BinQuery()
+          .drillToZones('MDU')
+          .withType('Compactor')
+          .withStatus('Collected in 12hr');
+      expect(q.describeScope, 'MDU · Compactor · Collected in 12hr');
+      expect(q.hasStatus, isTrue);
+      expect(const BinQuery().hasStatus, isFalse);
+    });
+  });
+
+  group('canonicalBinStatus', () {
+    test('maps the documented bucket keys', () {
+      expect(canonicalBinStatus('12hr'), 'Collected in 12hr');
+      expect(canonicalBinStatus('24hr'), 'Collected in 24hr');
+      expect(canonicalBinStatus('48hr'), 'Collected in 48hr');
+    });
+
+    test('tolerates spelling variants for the same bucket', () {
+      // The sample payload only ever showed `12hr`, so the other four spellings
+      // are unconfirmed; anything recognisable resolves.
+      for (final k in ['24hr', '24_hr', '24 hr', 'Collected in 24hr', 'HR24']) {
+        expect(canonicalBinStatus(k), 'Collected in 24hr', reason: k);
+      }
+      for (final k in ['yet_to_collect', 'Yet to collect', 'pending']) {
+        expect(canonicalBinStatus(k), 'Yet to collect', reason: k);
+      }
+      for (final k in ['under_maintenance', 'Under Maintenance', 'maintenance']) {
+        expect(canonicalBinStatus(k), 'Under Maintenance', reason: k);
+      }
+    });
+
+    test('returns null for an unrecognised key rather than guessing', () {
+      expect(canonicalBinStatus('sometimes'), isNull);
+      expect(canonicalBinStatus(''), isNull);
+      expect(canonicalBinStatus('   '), isNull);
+    });
+
+    test('orderBinStatuses keeps the documented order then extras', () {
+      expect(
+        orderBinStatuses(
+            {'Under Maintenance', 'zzz', 'Collected in 12hr', 'aaa'}),
+        ['Collected in 12hr', 'Under Maintenance', 'aaa', 'zzz'],
+      );
+    });
+  });
+
+  group('BinGroupRow status counts', () {
+    final row = BinGroupRow.fromJson(
+      {
+        'project': 'MDU',
+        'Compactor': {'12hr': 789, '24hr': 10, 'yet_to_collect': 4},
+        'Dumper': {'12hr': 64, 'under_maintenance': 2},
+      },
+      labelKey: 'project',
+    );
+
+    test('re-keys buckets onto the canonical status values', () {
+      expect(row.statusCountsFor('Compactor'), {
+        'Collected in 12hr': 789,
+        'Collected in 24hr': 10,
+        'Yet to collect': 4,
+      });
+      expect(row.statusCountsFor('Dumper'), {
+        'Collected in 12hr': 64,
+        'Under Maintenance': 2,
+      });
+    });
+
+    test('aggregates across types', () {
+      expect(row.statusCountsAll, {
+        'Collected in 12hr': 853,
+        'Collected in 24hr': 10,
+        'Yet to collect': 4,
+        'Under Maintenance': 2,
+      });
+    });
+
+    test('an unknown bucket is preserved under its raw key, not dropped', () {
+      final odd = BinGroupRow.fromJson(
+        {
+          'project': 'MDU',
+          'Compactor': {'12hr': 5, 'mystery': 3},
+        },
+        labelKey: 'project',
+      );
+      expect(odd.statusCountsFor('Compactor'),
+          {'Collected in 12hr': 5, 'mystery': 3});
+      // Still counted in the total, so no bins go missing.
+      expect(odd.count('Compactor'), 8);
+    });
+
+    test('aggregateStatusCounts sums every group on the dashboard', () {
+      final rows = [
+        BinGroupRow.fromJson({
+          'project': 'MDU',
+          'Compactor': {'12hr': 10},
+        }, labelKey: 'project'),
+        BinGroupRow.fromJson({
+          'project': 'TBM',
+          'Dumper': {'12hr': 5, 'yet_to_collect': 2},
+        }, labelKey: 'project'),
+      ];
+      expect(aggregateStatusCounts(rows),
+          {'Collected in 12hr': 15, 'Yet to collect': 2});
+    });
+
+    test('an empty row yields empty status counts, not an error', () {
+      final empty = BinGroupRow.fromJson(const {}, labelKey: 'project');
+      expect(empty.statusCountsAll, isEmpty);
+      expect(empty.statusCountsFor('Compactor'), isEmpty);
+      expect(aggregateStatusCounts([empty]), isEmpty);
     });
   });
 }

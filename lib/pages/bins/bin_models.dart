@@ -8,6 +8,8 @@ import 'package:flutter/foundation.dart';
 
 import 'package:ourlandnew/models/json_parse.dart';
 
+import 'bin_status.dart';
+
 /// Keys that identify a group rather than a bin-type bucket, so they are never
 /// mistaken for a count column.
 const Set<String> _kGroupMetaKeys = {
@@ -61,16 +63,48 @@ class BinGroupRow {
   /// Total across every type.
   int get total => countsByType.keys.fold(0, (sum, type) => sum + count(type));
 
-  /// `12hr 789` — the per-bucket breakdown for [type]. Null when there is
-  /// nothing extra to say (no buckets, or one unnamed bucket), so the row stays
-  /// clean in the common case.
+  /// Counts for [type] re-keyed onto the canonical [kBinStatuses] values.
+  ///
+  /// The raw bucket keys are the API's short spellings (`12hr`); this maps them
+  /// onto the values the list endpoint expects (`Collected in 12hr`) so the UI
+  /// can send them straight back. A bucket that maps to no known status is kept
+  /// under its raw key rather than dropped, so an unrecognised one still shows
+  /// and is still drillable.
+  Map<String, int> statusCountsFor(String type) {
+    final out = <String, int>{};
+    final buckets = countsByType[type];
+    if (buckets == null) return out;
+    buckets.forEach((rawKey, value) {
+      if (rawKey.isEmpty) return;
+      final status = canonicalBinStatus(rawKey) ?? rawKey;
+      out[status] = (out[status] ?? 0) + value;
+    });
+    return out;
+  }
+
+  /// Status counts summed across every bin type in this group.
+  Map<String, int> get statusCountsAll {
+    final out = <String, int>{};
+    for (final type in countsByType.keys) {
+      statusCountsFor(type).forEach((status, value) {
+        out[status] = (out[status] ?? 0) + value;
+      });
+    }
+    return out;
+  }
+
+  /// `12 hr 789 · Yet to collect 12` — the per-status breakdown for [type],
+  /// shown under the row label. Null when there is nothing extra to say (no
+  /// buckets, or a single unnamed one), so the row stays clean.
   String? captionFor(String type) {
     final buckets = countsByType[type];
     if (buckets == null || buckets.isEmpty) return null;
     if (buckets.length == 1 && buckets.keys.first.isEmpty) return null;
-    final entries = buckets.entries.toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
-    return entries.map((e) => '${e.key} ${e.value}').join(' · ');
+    final counts = statusCountsFor(type);
+    if (counts.isEmpty) return null;
+    return orderBinStatuses(counts.keys)
+        .map((s) => '${binStatusShortLabel(s)} ${counts[s]}')
+        .join(' · ');
   }
 
   /// [labelKey] is `project` / `zone` / `ward`; [idKey] the matching id field
@@ -133,4 +167,16 @@ List<String> unionBinTypes(
   final extras = present.where((t) => !canonicalOrder.contains(t)).toList()
     ..sort();
   return [...ordered, ...extras];
+}
+
+/// Status counts summed across every group in [rows] — the figures behind the
+/// dashboard's status summary cards. Entirely derived from the API response.
+Map<String, int> aggregateStatusCounts(List<BinGroupRow> rows) {
+  final out = <String, int>{};
+  for (final row in rows) {
+    row.statusCountsAll.forEach((status, value) {
+      out[status] = (out[status] ?? 0) + value;
+    });
+  }
+  return out;
 }

@@ -138,7 +138,7 @@ class _QueriedBinsPageState extends State<QueriedBinsPage> {
         onRefresh: _fetch,
         child: const DashEmptyScrollable(
           message: 'No bins match these filters',
-          hint: 'Try a different bin type, or go back a level.',
+          hint: 'Try a different bin type or status, or go back a level.',
           icon: Icons.search_off_rounded,
         ),
       );

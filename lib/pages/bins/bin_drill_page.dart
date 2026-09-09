@@ -1,13 +1,11 @@
-// ─── Bins — Screens 2 & 3: by Zone / by Ward ────────────────────────────────────
+// ─── Bins — By Location: Zones & Wards ─────────────────────────────────────────
 //
-// One page serves both aggregate levels; only the endpoint and what a header tap
-// opens differ:
+// The optional location chain, reached from the dashboard's "By Location" tab:
 //
-//   Screen 2 (zone level)  header → Screen 3 (wards)  row → Screen 4 (zone+type)
-//   Screen 3 (ward level)  header → Screen 4 (ward)   row → Screen 4 (ward+type)
+//   project → zones → wards → bin types → bin statuses → bin list
 //
-// The incoming BinQuery already carries the accumulated scope, so this screen
-// never assembles a query string itself.
+// One page serves both levels; only the endpoint and the drill target differ.
+// Cards are the same [BinDrillCard] every other Bins screen uses.
 
 import 'package:flutter/material.dart';
 
@@ -16,8 +14,8 @@ import 'package:ourlandnew/services/dash_api.dart';
 import 'bin_models.dart';
 import 'bin_query.dart';
 import 'bin_service.dart';
+import 'bin_type_page.dart';
 import 'bin_ui.dart';
-import 'queried_bins_page.dart';
 
 enum BinDrillLevel { zone, ward }
 
@@ -49,9 +47,6 @@ class _BinDrillPageState extends State<BinDrillPage> {
 
   bool get _isZone => widget.level == BinDrillLevel.zone;
 
-  // Note: the dashboard endpoints take no filter params — bin_type/status/owner
-  // apply to the bin list only, and are offered on that screen.
-
   @override
   void initState() {
     super.initState();
@@ -64,9 +59,9 @@ class _BinDrillPageState extends State<BinDrillPage> {
       _error = null;
     });
     try {
-      final q = _query;
-      final rows =
-          _isZone ? await _api.dashByZone(q) : await _api.dashByWard(q);
+      final rows = _isZone
+          ? await _api.dashByZone(_query)
+          : await _api.dashByWard(_query);
       if (!mounted) return;
       setState(() => _rows = rows);
     } on DashApiException catch (e) {
@@ -82,9 +77,8 @@ class _BinDrillPageState extends State<BinDrillPage> {
 
   // ── Navigation ───────────────────────────────────────────────────────────────
 
-  /// Group header tapped. At the zone level this opens that zone's wards; at the
-  /// ward level it opens every bin in that ward.
-  void _onHeaderTap(BinGroupRow row) {
+  /// A zone card opens its wards; a ward card opens that ward's bin types.
+  void _onRowTap(BinGroupRow row) {
     if (_isZone) {
       Navigator.push(
         context,
@@ -94,29 +88,22 @@ class _BinDrillPageState extends State<BinDrillPage> {
             level: BinDrillLevel.ward,
             // A null id is the unassigned bucket; drillToWards records that and
             // omits zone_id, which is how the endpoint returns bins with no zone.
-            query: _query
-                .drillToWards(zoneId: row.id, zoneCode: row.label),
+            query: _query.drillToWards(zoneId: row.id, zoneCode: row.label),
           ),
         ),
       ).then((_) => _fetch());
       return;
     }
-    _openBins(row: row, binType: kBinAll);
-  }
-
-  void _openBins({required BinGroupRow row, required String binType}) {
-    final scoped = _isZone
-        ? _query.withZone(zoneId: row.id, zoneCode: row.label)
-        : _query.withWard(wardId: row.id, wardCode: row.label);
 
     Navigator.push(
       context,
       MaterialPageRoute(
-        settings: const RouteSettings(name: kBinListRoute),
-        builder: (_) => QueriedBinsPage(
+        settings: const RouteSettings(name: kBinTypeRoute),
+        builder: (_) => BinTypePage(
           title: row.label,
-          query: scoped.withType(binType),
-          crumbs: _terminalCrumbs(row.label),
+          query: _query.withWard(wardId: row.id, wardCode: row.label),
+          row: row,
+          crumbs: _typeCrumbs(row.label),
         ),
       ),
     ).then((_) => _fetch());
@@ -141,21 +128,12 @@ class _BinDrillPageState extends State<BinDrillPage> {
     ];
   }
 
-  List<DashCrumb> _terminalCrumbs(String rowLabel) {
-    if (_isZone) {
-      return [
+  List<DashCrumb> _typeCrumbs(String wardLabel) => [
         const DashCrumb('Projects', routeName: kBinDashboardRoute),
         DashCrumb(_projectLabel, routeName: kBinZoneRoute),
-        DashCrumb(rowLabel),
+        DashCrumb(_zoneLabel, routeName: kBinWardRoute),
+        DashCrumb(wardLabel),
       ];
-    }
-    return [
-      const DashCrumb('Projects', routeName: kBinDashboardRoute),
-      DashCrumb(_projectLabel, routeName: kBinZoneRoute),
-      DashCrumb(_zoneLabel, routeName: kBinWardRoute),
-      DashCrumb(rowLabel),
-    ];
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -195,8 +173,7 @@ class _BinDrillPageState extends State<BinDrillPage> {
       );
     }
 
-    final types = unionBinTypes(_rows, kBinTypes);
-    final headerNoun = _isZone ? 'wards' : 'bins';
+    final targetNoun = _isZone ? 'wards' : 'bin types';
 
     return RefreshIndicator(
       onRefresh: _fetch,
@@ -204,18 +181,20 @@ class _BinDrillPageState extends State<BinDrillPage> {
         child: CustomScrollView(
           slivers: [
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 24),
               sliver: SliverList.builder(
                 itemCount: _rows.length,
                 itemBuilder: (context, index) {
                   final row = _rows[index];
-                  return buildBinSection(
-                    context: context,
-                    row: row,
-                    typeColumns: types,
-                    headerTargetNoun: headerNoun,
-                    onHeaderTap: () => _onHeaderTap(row),
-                    onTypeTap: (type) => _openBins(row: row, binType: type),
+                  return BinDrillCard(
+                    title: row.label,
+                    subtitle: row.isUnassigned ? 'No zone assigned' : null,
+                    count: row.total,
+                    accent: row.isUnassigned
+                        ? const Color(0xFF78909C)
+                        : Theme.of(context).colorScheme.primary,
+                    targetNoun: targetNoun,
+                    onTap: () => _onRowTap(row),
                   );
                 },
               ),

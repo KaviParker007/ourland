@@ -9,6 +9,8 @@ import 'package:ourlandnew/pages/fuel_log/add_fuel_log.dart';
 import 'package:ourlandnew/pages/fuel_log/edit_fuel_log.dart';
 import 'package:ourlandnew/pages/notifications/notification_bell.dart';
 import 'package:ourlandnew/pages/login.dart';
+import 'package:ourlandnew/services/api_logger.dart';
+import 'package:ourlandnew/services/fuel_log_api_tag.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 
 class FuelLogListBuilder extends StatefulWidget {
@@ -194,16 +196,25 @@ class _FuelLogListBuilderState extends State<FuelLogListBuilder>
         await http.MultipartFile.fromPath('after_image', imagePath),
       );
 
-      print("Uploading After Image...");
-      print("URL: $uri");
-      print("ID: $fuelLogId");
-      print("Image Path: $imagePath");
-
+      final sw = Stopwatch()..start();
       var response = await request.send();
       var res = await http.Response.fromStream(response);
+      sw.stop();
 
-      print("Status: ${res.statusCode}");
-      print("Body: ${res.body}");
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'POST',
+        uri: uri,
+        headers: request.headers,
+        fields: request.fields,
+        files: [
+          for (final f in request.files)
+            '${f.field} -> ${f.filename} (${f.length} bytes)',
+        ],
+        statusCode: res.statusCode,
+        responseBody: res.body,
+        elapsedMs: sw.elapsedMilliseconds,
+      );
 
       if (res.statusCode == 200||res.statusCode ==201) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -215,7 +226,13 @@ class _FuelLogListBuilderState extends State<FuelLogListBuilder>
         );
       }
     } catch (e) {
-      print("Error: $e");
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'POST',
+        uri: Uri.parse("${AppConfig.apiUrl}/drf_fuel_log_after_image/"),
+        fields: {'id': fuelLogId.toString(), 'after_image': imagePath},
+        error: e,
+      );
     } finally {
       setState(() {
         isLoading = false;
@@ -269,14 +286,19 @@ class _FuelLogListState extends State<FuelLogList> {
     var auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
     var headers = {'Content-Type': 'application/json', 'authorization': auth};
 
+    final sw = Stopwatch()..start();
     try {
       var response = await http.get(uri, headers: headers);
-      print('fuellog_check');
-      print(uri);
-      print(username);
-      print(password);
-      print(response.statusCode);
-      print(response.body);
+      sw.stop();
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'GET',
+        uri: uri,
+        headers: headers,
+        statusCode: response.statusCode,
+        responseBody: response.body,
+        elapsedMs: sw.elapsedMilliseconds,
+      );
       if (response.statusCode == 200) {
         setState(() {
           fuelLogs = jsonDecode(response.body);
@@ -286,7 +308,15 @@ class _FuelLogListState extends State<FuelLogList> {
         errorMsg("500 - Server Error");
       }
     } catch (e) {
-      print('Exception: $e');
+      sw.stop();
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'GET',
+        uri: uri,
+        headers: headers,
+        error: e,
+        elapsedMs: sw.elapsedMilliseconds,
+      );
       errorMsg("500 - Server Error");
     }
     setState(() {

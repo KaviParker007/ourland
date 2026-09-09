@@ -8,6 +8,11 @@ import "package:ourlandnew/components/label.dart";
 import "package:ourlandnew/config.dart";
 import 'package:http/http.dart' as http;
 import "package:ourlandnew/pages/login.dart";
+import "package:ourlandnew/services/api_logger.dart";
+import "package:ourlandnew/services/fuel_log_api_tag.dart";
+
+import "fuel_alert_dialog.dart";
+import "last_fueling_detail.dart";
 import 'package:dropdown_search/dropdown_search.dart';
 
 import "../../components/image_picker.dart";
@@ -42,14 +47,106 @@ class _AddFuelLogState extends State<AddFuelLog> {
   // Read-only controllers for last fuel details
   TextEditingController lastOdoReadingController = TextEditingController();
   TextEditingController lastFuelDateController = TextEditingController();
+  TextEditingController lastFuelTimeController = TextEditingController();
   TextEditingController lastFuelQuantityController = TextEditingController();
   TextEditingController lastMileageController = TextEditingController();
+  TextEditingController mileageStatusController = TextEditingController();
+  TextEditingController fuelFreqController = TextEditingController();
 
   int? vehicle;
   int? fuelStation;
   String? fuelType = "P";
 
-  Map<String, dynamic> lastFuelDetails = {};
+  LastFuelingDetail lastFuelDetails = LastFuelingDetail.empty;
+
+  /// Maps a grid key to its read-only controller. Keeps the layout list above
+  /// declarative without repeating 40 lines of decoration per field.
+  TextEditingController _lastFuelController(String key) {
+    switch (key) {
+      case 'odo':
+        return lastOdoReadingController;
+      case 'date':
+        return lastFuelDateController;
+      case 'time':
+        return lastFuelTimeController;
+      case 'qty':
+        return lastFuelQuantityController;
+      case 'mileage':
+        return lastMileageController;
+      case 'mileageStatus':
+        return mileageStatusController;
+      default:
+        return fuelFreqController;
+    }
+  }
+
+  /// One read-only detail field, styled exactly as the original hand-written
+  /// ones were (grey fill, 8 px radius, dense padding).
+  Widget _lastFuelField(String label, String key) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label,
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis),
+        TextFormField(
+          controller: _lastFuelController(key),
+          enabled: false,
+          style: const TextStyle(
+              color: Colors.black, fontWeight: FontWeight.w500, fontSize: 14),
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: Colors.grey.shade100,
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Lays [fields] out as `[label, key]` pairs: two per row when there is room,
+  /// one per row when there is not. The breakpoint scales with the user's text
+  /// size, so a large font falls back to a single column instead of squeezing.
+  Widget _lastFuelGrid(List<List<String>> fields) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final textScale = MediaQuery.textScalerOf(context).scale(1);
+        final twoUp = constraints.maxWidth >= 260 * textScale;
+        const gap = 10.0;
+        final width = twoUp ? (constraints.maxWidth - gap) / 2 : constraints.maxWidth;
+
+        return Wrap(
+          spacing: gap,
+          runSpacing: 8,
+          children: [
+            for (final f in fields)
+              SizedBox(
+                width: width,
+                child: _lastFuelField(f[0], f[1]),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Pushes [lastFuelDetails] into the read-only fields. Called from inside
+  /// setState on every outcome — success, non-200 and exception — so the panel
+  /// can never keep showing a previous vehicle's figures.
+  void _applyLastFuelDetails() {
+    lastOdoReadingController.text = lastFuelDetails.odoReadingDisplay;
+    lastFuelDateController.text = lastFuelDetails.fuelDateDisplay;
+    lastFuelTimeController.text = lastFuelDetails.fuelTimeDisplay;
+    lastFuelQuantityController.text = lastFuelDetails.fuelQuantityDisplay;
+    lastMileageController.text = lastFuelDetails.mileageDisplay;
+    mileageStatusController.text = lastFuelDetails.mileageStatusDisplay;
+    fuelFreqController.text = lastFuelDetails.fuelFreqDisplay;
+  }
 
   @override
   void initState() {
@@ -71,28 +168,33 @@ class _AddFuelLogState extends State<AddFuelLog> {
         'authorization': auth
       };
 
+      final sw = Stopwatch()..start();
       var response = await http.get(uri, headers: headers);
-      print('Last Fuel Details Response: ${response.body}');
+      sw.stop();
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'GET',
+        uri: uri,
+        headers: headers,
+        statusCode: response.statusCode,
+        responseBody: response.body,
+        elapsedMs: sw.elapsedMilliseconds,
+      );
 
       if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
         setState(() {
-          lastFuelDetails = jsonDecode(response.body);
-          lastOdoReadingController.text =
-              lastFuelDetails['last_odo_reading']?.toString() ?? 'N/A';
-          lastFuelDateController.text =
-              lastFuelDetails['last_fuel_date'] ?? 'N/A';
-          lastFuelQuantityController.text =
-              lastFuelDetails['last_fuel_quantity']?.toString() ?? 'N/A';
-          lastMileageController.text =
-              lastFuelDetails['mileage']?.toString() ?? 'N/A';
+          // A payload that is not a JSON object still yields the empty detail
+          // rather than throwing.
+          lastFuelDetails = decoded is Map<String, dynamic>
+              ? LastFuelingDetail.fromJson(decoded)
+              : LastFuelingDetail.empty;
+          _applyLastFuelDetails();
         });
       } else {
         setState(() {
-          lastFuelDetails = {};
-          lastOdoReadingController.text = 'N/A';
-          lastFuelDateController.text = 'N/A';
-          lastFuelQuantityController.text = 'N/A';
-          lastMileageController.text = 'N/A';
+          lastFuelDetails = LastFuelingDetail.empty;
+          _applyLastFuelDetails();
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -104,13 +206,16 @@ class _AddFuelLogState extends State<AddFuelLog> {
         );
       }
     } catch (e) {
-      print('Error fetching last fuel details: $e');
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'GET',
+        uri: Uri.parse(
+            "$baseUrl/drf_get_last_fueling_detail/?vehicle_id=$vehicleId"),
+        error: e,
+      );
       setState(() {
-        lastFuelDetails = {};
-        lastOdoReadingController.text = 'N/A';
-        lastFuelDateController.text = 'N/A';
-        lastFuelQuantityController.text = 'N/A';
-        lastMileageController.text = 'N/A';
+        lastFuelDetails = LastFuelingDetail.empty;
+        _applyLastFuelDetails();
       });
     } finally {
       setState(() {
@@ -136,30 +241,48 @@ class _AddFuelLogState extends State<AddFuelLog> {
 
       for (var entry in images.entries) {
         if (entry.value != null && entry.value.toString().isNotEmpty) {
-          print("Adding file: ${entry.key} -> ${entry.value}");
           request.files.add(
             await http.MultipartFile.fromPath(entry.key, entry.value),
           );
         }
       }
 
-      print("=========== REQUEST DEBUG ===========");
-      print("URL: $uri");
-      print("Fields: ${request.fields}");
-      for (var file in request.files) {
-        print("  File: ${file.field} -> ${file.filename} (${file.length} bytes)");
-      }
-      print("======================================");
-
+      final sw = Stopwatch()..start();
       var streamedResponse = await request.send();
       var response = await http.Response.fromStream(streamedResponse);
+      sw.stop();
 
-      print("Status Code: ${response.statusCode}");
-      print("Response Body: ${response.body}");
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'POST',
+        uri: uri,
+        headers: request.headers,
+        fields: request.fields,
+        files: [
+          for (final f in request.files)
+            '${f.field} -> ${f.filename} (${f.length} bytes)',
+        ],
+        statusCode: response.statusCode,
+        responseBody: response.body,
+        elapsedMs: sw.elapsedMilliseconds,
+      );
 
       return response;
     } catch (e) {
-      print("ERROR: $e");
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'POST',
+        uri: Uri.parse("$baseUrl/drf-add-fuel-log/"),
+        fields: {
+          for (final entry in data.entries) entry.key: entry.value.toString(),
+        },
+        files: [
+          for (final entry in images.entries)
+            if (entry.value != null && entry.value.toString().isNotEmpty)
+              '${entry.key} -> ${entry.value}',
+        ],
+        error: e,
+      );
       errorMsg(e.toString());
       return http.Response("Error", 500);
     }
@@ -186,6 +309,21 @@ class _AddFuelLogState extends State<AddFuelLog> {
         isLoading = false;
       });
     } else {
+      // The backend flagged a warning for this vehicle. Gate the save on an
+      // explicit acknowledgement — advisory, not a validation failure, so the
+      // user can always continue.
+      if (lastFuelDetails.shouldWarn) {
+        final proceed = await showFuelAlertDialog(context, lastFuelDetails);
+        if (!mounted) return;
+        if (!proceed) {
+          // Cancelled or dismissed — return to the form with nothing submitted.
+          setState(() {
+            isLoading = false;
+          });
+          return;
+        }
+      }
+
       final Map<String, dynamic> data = {
         "vehicle": vehicle,
         "fuel_station": fuelStation,
@@ -194,6 +332,10 @@ class _AddFuelLogState extends State<AddFuelLog> {
         "fuel_quantity": fuelQuantity,
         "fuel_unit_cost": fuelUnitCost,
         "remark": remark,
+        // Posted exactly as the detail endpoint returned it — never generated
+        // or reworded here. Omitted entirely when there was no warning.
+        if (lastFuelDetails.alertMessageForSubmission != null)
+          "alert_message": lastFuelDetails.alertMessageForSubmission,
       };
 
       final Map<String, dynamic> images = {
@@ -253,10 +395,19 @@ class _AddFuelLogState extends State<AddFuelLog> {
     var auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
     var headers = {'Content-Type': 'application/json', 'authorization': auth};
 
+    final sw = Stopwatch()..start();
     try {
       var fuelStationResponse = await http.get(vehicleFuelUri, headers: headers);
-      print('fuelStationResponse.body');
-      print(fuelStationResponse.body);
+      sw.stop();
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'GET',
+        uri: vehicleFuelUri,
+        headers: headers,
+        statusCode: fuelStationResponse.statusCode,
+        responseBody: fuelStationResponse.body,
+        elapsedMs: sw.elapsedMilliseconds,
+      );
 
       if (fuelStationResponse.statusCode == 200) {
         setState(() {
@@ -266,7 +417,15 @@ class _AddFuelLogState extends State<AddFuelLog> {
         });
       }
     } catch (e) {
-      print('Exception: $e');
+      sw.stop();
+      logApiCall(
+        tag: kFuelLogApiTag,
+        method: 'GET',
+        uri: vehicleFuelUri,
+        headers: headers,
+        error: e,
+        elapsedMs: sw.elapsedMilliseconds,
+      );
     }
   }
 
@@ -462,140 +621,20 @@ class _AddFuelLogState extends State<AddFuelLog> {
                           ],
                         ),
                         const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment:
-                                CrossAxisAlignment.start,
-                                children: [
-                                  const Text('Last ODO Reading',
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey)),
-                                  TextFormField(
-                                    controller:
-                                    lastOdoReadingController,
-                                    enabled: false,
-                                    style: const TextStyle(
-                                        color: Colors.black,
-                                        fontWeight: FontWeight.w500,
-                                        fontSize: 14),
-                                    decoration: InputDecoration(
-                                      filled: true,
-                                      fillColor: Colors.grey.shade100,
-                                      border: OutlineInputBorder(
-                                          borderRadius:
-                                          BorderRadius.circular(
-                                              8)),
-                                      contentPadding:
-                                      const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 8),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment:
-                                CrossAxisAlignment.start,
-                                children: [
-                                  const Text('Last Fuel Date',
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey)),
-                                  TextFormField(
-                                    controller: lastFuelDateController,
-                                    enabled: false,
-                                    style: const TextStyle(
-                                        color: Colors.black,
-                                        fontWeight: FontWeight.w500,
-                                        fontSize: 14),
-                                    decoration: InputDecoration(
-                                      filled: true,
-                                      fillColor: Colors.grey.shade100,
-                                      border: OutlineInputBorder(
-                                          borderRadius:
-                                          BorderRadius.circular(
-                                              8)),
-                                      contentPadding:
-                                      const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 8),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text('Last Fuel Qty',
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey)),
-                                  TextFormField(
-                                    controller: lastFuelQuantityController,
-                                    enabled: false,
-                                    style: const TextStyle(
-                                        color: Colors.black,
-                                        fontWeight: FontWeight.w500,
-                                        fontSize: 14),
-                                    decoration: InputDecoration(
-                                      filled: true,
-                                      fillColor: Colors.grey.shade100,
-                                      border: OutlineInputBorder(
-                                          borderRadius:
-                                          BorderRadius.circular(8)),
-                                      contentPadding:
-                                      const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 8),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text('Mileage',
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey)),
-                                  TextFormField(
-                                    controller: lastMileageController,
-                                    enabled: false,
-                                    style: const TextStyle(
-                                        color: Colors.black,
-                                        fontWeight: FontWeight.w500,
-                                        fontSize: 14),
-                                    decoration: InputDecoration(
-                                      filled: true,
-                                      fillColor: Colors.grey.shade100,
-                                      border: OutlineInputBorder(
-                                          borderRadius:
-                                          BorderRadius.circular(8)),
-                                      contentPadding:
-                                      const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 8),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
+                        // Every field the detail endpoint returns, laid out two
+                        // per row on a phone and wider viewports alike, dropping
+                        // to one per row when there is not enough width — so a
+                        // long value or a large text scale cannot overflow.
+                        _lastFuelGrid(const [
+                          ['Last ODO Reading', 'odo'],
+                          ['Last Fuel Date', 'date'],
+                          ['Last Fuel Time', 'time'],
+                          ['Last Fuel Qty', 'qty'],
+                          ['Mileage', 'mileage'],
+                          ['Mileage Status', 'mileageStatus'],
+                          ['Fuel Frequency', 'fuelFreq'],
+                        ]),
+                        FuelAlertBanner(detail: lastFuelDetails),
                       ],
                     ),
                   ),

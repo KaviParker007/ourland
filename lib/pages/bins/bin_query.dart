@@ -45,9 +45,15 @@ const List<String> kBinTypes = <String>[
 ];
 
 /// Whether a filter left at [kBinAll] is omitted from the query string instead of
-/// sent literally. The endpoints document `All` as the default, so it is sent
-/// literally; flip this one constant to switch the whole module to omission.
-const bool kOmitBinAllValues = false;
+/// sent literally.
+///
+/// `true`: these are documented as *optional* parameters that default to `All`
+/// server-side, and the contract's worked example sends only the parameters the
+/// user actually chose — `?bin_status=Collected%20in%2012hr&project=MDU&
+/// bin_type=Compactor`, with no `bin_owner` at all. Omitting is therefore both
+/// correct and what produces that exact URL. Flip this one constant to send the
+/// literal `All` instead.
+const bool kOmitBinAllValues = true;
 
 /// Normalises one filter value for the wire. Returns null when the parameter
 /// should be left out entirely. The only place the `All` rule is expressed.
@@ -215,24 +221,36 @@ class BinQuery {
   BinQuery withType(String binType) =>
       copyWith(filters: filters.copyWith(binType: binType));
 
+  /// Narrows to one bin status. [status] must already be a canonical value —
+  /// see kBinStatuses — because it goes on the wire verbatim.
+  BinQuery withStatus(String binStatus) =>
+      copyWith(filters: filters.copyWith(binStatus: binStatus));
+
   BinQuery withFilters(BinFilters next) => copyWith(filters: next);
 
   // ── Derived ──────────────────────────────────────────────────────────────────
 
-  bool get hasType =>
-      filters.binType.trim().isNotEmpty &&
-      filters.binType.toLowerCase() != kBinAll.toLowerCase();
+  static bool _isSet(String value) =>
+      value.trim().isNotEmpty && value.toLowerCase() != kBinAll.toLowerCase();
 
-  /// Human-readable provenance for the Screen 4 header, e.g.
-  /// `MDU › MDU-Z5 › MDU-Z5-W84 · Dumper`.
+  bool get hasType => _isSet(filters.binType);
+  bool get hasStatus => _isSet(filters.binStatus);
+  bool get hasOwner => _isSet(filters.binOwner);
+
+  /// Human-readable provenance for the bin-list header, e.g.
+  /// `MDU › MDU-Z5 › MDU-Z5-W84 · Dumper · Collected in 12hr`.
   String get describeScope {
     final parts = <String>[
       if (project != null && project!.isNotEmpty) project!,
       if (zoneCode != null && zoneCode!.isNotEmpty) zoneCode!,
       if (wardCode != null && wardCode!.isNotEmpty) wardCode!,
     ];
-    final where = parts.isEmpty ? 'All locations' : parts.join(' › ');
-    return hasType ? '$where · ${filters.binType}' : '$where · All bin types';
+    return [
+      parts.isEmpty ? 'All locations' : parts.join(' › '),
+      hasType ? filters.binType : 'All bin types',
+      if (hasStatus) filters.binStatus,
+      if (hasOwner) filters.binOwner,
+    ].join(' · ');
   }
 
   // ── Wire format ──────────────────────────────────────────────────────────────

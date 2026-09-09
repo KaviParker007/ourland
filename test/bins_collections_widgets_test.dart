@@ -12,8 +12,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ourlandnew/components/bin_record_card.dart';
 import 'package:ourlandnew/models/bin_record.dart';
-import 'package:ourlandnew/pages/bins/bin_models.dart';
 import 'package:ourlandnew/pages/bins/bin_query.dart';
+import 'package:ourlandnew/pages/bins/bin_status.dart';
 import 'package:ourlandnew/pages/bins/bin_ui.dart';
 import 'package:ourlandnew/pages/collections/collection_models.dart';
 import 'package:ourlandnew/pages/collections/collection_query.dart';
@@ -80,164 +80,138 @@ BinRecord record({
 }
 
 void main() {
-  group('Bins GroupSection', () {
-    final row = BinGroupRow.fromJson(
-      {
-        'project': 'MDU',
-        'Compactor': {'12hr': 789},
-        'Dumper': {'12hr': 64},
-        'Others': {'12hr': 0},
-      },
-      labelKey: 'project',
-    );
-
-    testWidgets('renders the group header and one row per bin type',
+  group('BinDrillCard', () {
+    testWidgets('renders title, count and chevron like a Vehicle Type card',
         (tester) async {
-      await tester.pumpWidget(host(Builder(
-        builder: (context) => buildBinSection(
-          context: context,
-          row: row,
-          typeColumns: const ['Compactor', 'Dumper', 'Others'],
-          onHeaderTap: () {},
-          onTypeTap: (_) {},
-        ),
+      await tester.pumpWidget(host(BinDrillCard(
+        title: 'MDU',
+        count: 853,
+        accent: const Color(0xFF6A6CFF),
+        onTap: () {},
       )));
 
       expect(find.text('MDU'), findsOneWidget);
-      expect(find.text('Compactor'), findsOneWidget);
-      expect(find.text('789'), findsOneWidget);
-      expect(find.text('Dumper'), findsOneWidget);
-      expect(find.text('64'), findsOneWidget);
-      // Group total badge.
       expect(find.text('853'), findsOneWidget);
-      expect(find.byType(TypeCountRow), findsNWidgets(3));
+      expect(find.byIcon(Icons.chevron_right_rounded), findsOneWidget);
     });
 
-    testWidgets('shows the nested bucket breakdown as a caption',
-        (tester) async {
-      final multi = BinGroupRow.fromJson(
-        {
-          'zone': 'MDU-Z5',
-          'zone_id': 11,
-          'Compactor': {'12hr': 10, '24hr': 5},
-        },
-        labelKey: 'zone',
-        idKey: 'zone_id',
-      );
-      await tester.pumpWidget(host(Builder(
-        builder: (context) => buildBinSection(
-          context: context,
-          row: multi,
-          typeColumns: const ['Compactor'],
-          onHeaderTap: () {},
-          onTypeTap: (_) {},
-        ),
-      )));
-
-      expect(find.text('12hr 10 · 24hr 5'), findsOneWidget);
-      expect(find.text('15'), findsNWidgets(2)); // row count + group total
-    });
-
-    testWidgets('header tap and type-row tap are separate destinations',
-        (tester) async {
-      var headerTaps = 0;
-      final typeTaps = <String>[];
-
-      await tester.pumpWidget(host(Builder(
-        builder: (context) => buildBinSection(
-          context: context,
-          row: row,
-          typeColumns: const ['Compactor', 'Dumper', 'Others'],
-          onHeaderTap: () => headerTaps++,
-          onTypeTap: typeTaps.add,
-        ),
+    testWidgets('tapping a populated card fires', (tester) async {
+      var taps = 0;
+      await tester.pumpWidget(host(BinDrillCard(
+        title: 'MDU',
+        count: 853,
+        accent: const Color(0xFF6A6CFF),
+        onTap: () => taps++,
       )));
 
       await tester.tap(find.text('MDU'));
       await tester.pump();
-      expect(headerTaps, 1);
-      expect(typeTaps, isEmpty);
-
-      await tester.tap(find.text('Compactor'));
-      await tester.pump();
-      expect(typeTaps, ['Compactor']);
-      expect(headerTaps, 1);
+      expect(taps, 1);
     });
 
-    testWidgets('a zero-count row is inert', (tester) async {
-      final typeTaps = <String>[];
-      await tester.pumpWidget(host(Builder(
-        builder: (context) => buildBinSection(
-          context: context,
-          row: row,
-          typeColumns: const ['Compactor', 'Dumper', 'Others'],
-          onHeaderTap: () {},
-          onTypeTap: typeTaps.add,
-        ),
+    testWidgets('a zero count is inert and loses its chevron', (tester) async {
+      var taps = 0;
+      await tester.pumpWidget(host(BinDrillCard(
+        title: 'Empty',
+        count: 0,
+        accent: const Color(0xFF6A6CFF),
+        onTap: () => taps++,
       )));
 
-      await tester.tap(find.text('Others'));
+      await tester.tap(find.text('Empty'));
       await tester.pump();
-      expect(typeTaps, isEmpty);
+      expect(taps, 0);
+      expect(find.byIcon(Icons.chevron_right_rounded), findsNothing);
+      // The count is still shown — an empty bucket is information.
+      expect(find.text('0'), findsOneWidget);
     });
 
-    testWidgets('an unassigned group is labelled and styled apart',
+    testWidgets('shows a subtitle and a leading dot when asked',
         (tester) async {
-      final unassigned = BinGroupRow.fromJson(
-        {
-          'zone': null,
-          'zone_id': null,
-          'Dumper': {'12hr': 3},
-        },
-        labelKey: 'zone',
-        idKey: 'zone_id',
-      );
-      await tester.pumpWidget(host(Builder(
-        builder: (context) => buildBinSection(
-          context: context,
-          row: unassigned,
-          typeColumns: const ['Dumper'],
-          onHeaderTap: () {},
-          onTypeTap: (_) {},
-        ),
+      await tester.pumpWidget(host(BinDrillCard(
+        title: 'Unassigned',
+        subtitle: 'No zone assigned',
+        count: 3,
+        accent: const Color(0xFF78909C),
+        showDot: true,
+        onTap: () {},
       )));
 
       expect(find.text('Unassigned'), findsOneWidget);
       expect(find.text('No zone assigned'), findsOneWidget);
     });
 
-    testWidgets('every tap target is at least 48 dp tall', (tester) async {
-      await tester.pumpWidget(host(Builder(
-        builder: (context) => buildBinSection(
-          context: context,
-          row: row,
-          typeColumns: const ['Compactor', 'Dumper'],
-          onHeaderTap: () {},
-          onTypeTap: (_) {},
-        ),
+    testWidgets('meets the minimum tap target', (tester) async {
+      await tester.pumpWidget(host(BinDrillCard(
+        title: 'MDU',
+        count: 1,
+        accent: const Color(0xFF6A6CFF),
+        onTap: () {},
+      )));
+      expect(tester.getSize(find.byType(BinDrillCard)).height,
+          greaterThanOrEqualTo(kDashMinTapTarget));
+    });
+  });
+
+  group('Bin status cards', () {
+    testWidgets('each status keeps its own colour and icon', (tester) async {
+      await tester.pumpWidget(host(Column(
+        children: [
+          for (final s in kBinStatuses)
+            buildBinStatusCard(status: s, count: 5, onTap: () {}),
+        ],
       )));
 
-      for (final element in find.byType(TypeCountRow).evaluate()) {
-        expect(tester.getSize(find.byWidget(element.widget)).height,
-            greaterThanOrEqualTo(kDashMinTapTarget));
+      // All five render, under their canonical names.
+      for (final s in kBinStatuses) {
+        expect(find.text(s), findsOneWidget);
+      }
+      // Each carries its own icon, so the status/icon pairing stays consistent
+      // wherever a status appears. Derived from binStatusIcon rather than
+      // hardcoded, so retuning an icon does not break this test.
+      final icons = {for (final s in kBinStatuses) binStatusIcon(s)};
+      expect(icons.length, kBinStatuses.length,
+          reason: 'every status needs a distinct icon');
+      for (final icon in icons) {
+        expect(find.byIcon(icon), findsOneWidget);
       }
     });
 
-    testWidgets('survives a 2x text scale without overflowing',
-        (tester) async {
-      await tester.pumpWidget(host(
-        Builder(
-          builder: (context) => buildBinSection(
-            context: context,
-            row: row,
-            typeColumns: const ['Compactor', 'Dumper', 'Others'],
-            onHeaderTap: () {},
-            onTypeTap: (_) {},
-          ),
-        ),
-        textScale: 2.0,
-      ));
-      expect(tester.takeException(), isNull);
+    testWidgets('the card accent is the status colour', (tester) async {
+      for (final s in kBinStatuses) {
+        await tester.pumpWidget(
+            host(buildBinStatusCard(status: s, count: 5, onTap: () {})));
+        final card = tester.widget<BinDrillCard>(find.byType(BinDrillCard));
+        expect(card.accent, binStatusColor(s), reason: s);
+        expect(card.icon, binStatusIcon(s), reason: s);
+      }
+    });
+
+    testWidgets('tapping reports the canonical status value', (tester) async {
+      final taps = <String>[];
+      await tester.pumpWidget(host(Column(
+        children: [
+          for (final s in kBinStatuses)
+            buildBinStatusCard(status: s, count: 5, onTap: () => taps.add(s)),
+        ],
+      )));
+
+      await tester.tap(find.text('Collected in 12hr'));
+      await tester.tap(find.text('Yet to collect'));
+      await tester.pump();
+      expect(taps, ['Collected in 12hr', 'Yet to collect']);
+    });
+
+    testWidgets('a status with no bins is inert', (tester) async {
+      var taps = 0;
+      await tester.pumpWidget(host(buildBinStatusCard(
+        status: 'Under Maintenance',
+        count: 0,
+        onTap: () => taps++,
+      )));
+      await tester.tap(find.text('Under Maintenance'));
+      await tester.pump();
+      expect(taps, 0);
     });
   });
 
@@ -494,20 +468,12 @@ void main() {
   // The flutter_test font renders every glyph a full em wide, so these sweeps
   // are a deliberately pessimistic proxy for wide fonts and large text scales —
   // it is what caught the date-button overflow at 320 dp.
+  // The flutter_test font renders every glyph a full em wide, so these sweeps
+  // are a deliberately pessimistic proxy for wide fonts and large text scales —
+  // it is what caught the date-button overflow at 320 dp.
   group('Responsive sweep — no overflow anywhere', () {
     const widths = [320.0, 360.0, 480.0, 600.0, 768.0, 900.0, 1200.0];
     const scales = [1.0, 1.5, 2.0];
-
-    final binRow = BinGroupRow.fromJson(
-      {
-        'zone': 'MDU-Z5-VERYLONGZONECODE',
-        'zone_id': 11,
-        'Compactor': {'12hr': 789, '24hr': 120},
-        'Dumper': {'12hr': 64},
-      },
-      labelKey: 'zone',
-      idKey: 'zone_id',
-    );
 
     final colRow = CollectionGroupRow.fromJson(
       {'ward': 'MDU-Z5-W84', 'ward_id': 84, 'Compactor': 10, 'Dumper': 1},
@@ -515,19 +481,43 @@ void main() {
       idKey: 'ward_id',
     );
 
-    testWidgets('bin section', (tester) async {
+    testWidgets('bin drill cards, every variant', (tester) async {
+      final variants = <BinDrillCard>[
+        BinDrillCard(
+          title: 'MDU-Z5-VERYLONGZONECODE-THAT-KEEPS-GOING',
+          count: 123456,
+          accent: const Color(0xFF6A6CFF),
+          onTap: () {},
+        ),
+        BinDrillCard(
+          title: 'Unassigned',
+          subtitle: 'No zone assigned',
+          count: 7,
+          accent: const Color(0xFF78909C),
+          showDot: true,
+          onTap: () {},
+        ),
+        buildBinStatusCard(
+            status: 'Collected in 12hr', count: 98765, onTap: () {}),
+        buildBinStatusCard(status: 'Under Maintenance', count: 0, onTap: () {}),
+      ];
+
+      for (final w in widths) {
+        for (final s in scales) {
+          for (final card in variants) {
+            await tester.pumpWidget(host(card, width: w, textScale: s));
+            expect(tester.takeException(), isNull,
+                reason: 'width $w scale $s "${card.title}"');
+          }
+        }
+      }
+    });
+
+    testWidgets('the chain toggle', (tester) async {
       for (final w in widths) {
         for (final s in scales) {
           await tester.pumpWidget(host(
-            Builder(
-              builder: (context) => buildBinSection(
-                context: context,
-                row: binRow,
-                typeColumns: const ['Compactor', 'Dumper'],
-                onHeaderTap: () {},
-                onTypeTap: (_) {},
-              ),
-            ),
+            BinChainBar(chain: BinChain.type, onChanged: (_) {}),
             width: w,
             textScale: s,
           ));
@@ -605,7 +595,7 @@ void main() {
             BinFilterBar(
               filters: const BinFilters(
                   binType: 'Compactor',
-                  binStatus: 'Active',
+                  binStatus: 'Collected in 12hr',
                   binOwner: 'Corporation'),
               onClear: (_) {},
               onEdit: () {},
@@ -619,6 +609,7 @@ void main() {
     });
   });
 
+
   group('BinFilterBar', () {
     testWidgets('states the default selection when nothing is filtered',
         (tester) async {
@@ -627,7 +618,7 @@ void main() {
         onClear: (_) {},
         onEdit: () {},
       )));
-      expect(find.text('All bin types'), findsOneWidget);
+      expect(find.text('All bin types · All statuses'), findsOneWidget);
       expect(find.byType(Chip), findsNothing);
     });
 
@@ -672,7 +663,7 @@ void main() {
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.tap(find.byType(DropdownButtonFormField<String>).first);
       await tester.pumpAndSettle();
 
       // Canonical ordering, and nothing the API did not return.
@@ -704,7 +695,7 @@ void main() {
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.tap(find.byType(DropdownButtonFormField<String>).first);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Dumper').last);
       await tester.pumpAndSettle();
@@ -724,7 +715,8 @@ void main() {
               onPressed: () async {
                 applied = await showBinFilterSheet(
                   context,
-                  const BinFilters(binType: 'Dumper'),
+                  const BinFilters(
+                      binType: 'Dumper', binStatus: 'Yet to collect'),
                   const ['Dumper'],
                 );
               },
@@ -739,7 +731,44 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(applied?.binType, kBinAll);
+      expect(applied?.binStatus, kBinAll);
       expect(applied?.hasActive, isFalse);
+    });
+
+    testWidgets('the status dropdown returns the canonical API value',
+        (tester) async {
+      BinFilters? applied;
+      await tester.pumpWidget(MaterialApp(
+        theme: darkMode,
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () async {
+                applied = await showBinFilterSheet(
+                  context,
+                  const BinFilters(),
+                  const ['Compactor'],
+                );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      // Second dropdown is Bin Status.
+      await tester.tap(find.byType(DropdownButtonFormField<String>).last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Collected in 24hr').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Apply Filters'));
+      await tester.pumpAndSettle();
+
+      // Exactly the value the API expects, not a display label.
+      expect(applied?.binStatus, 'Collected in 24hr');
+      expect(applied?.binType, kBinAll);
     });
   });
 

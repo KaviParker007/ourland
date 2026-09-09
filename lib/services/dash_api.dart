@@ -49,12 +49,23 @@ Map<String, String> cleanParams(Map<String, String?> params) {
 
 /// Builds an absolute request URI. A free function so tests can assert the exact
 /// query string without instantiating a client.
+///
+/// The query is encoded by hand rather than through `replace(queryParameters:)`
+/// because that helper emits `+` for a space. Most servers decode the two
+/// identically, but the API contract specifies `%20` (e.g.
+/// `bin_status=Collected%20in%2012hr`), so [Uri.encodeComponent] is used to
+/// produce exactly that.
 Uri buildApiUri(String baseUrl, String path, Map<String, String> params) {
   final base =
       baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
   final suffix = path.startsWith('/') ? path.substring(1) : path;
-  return Uri.parse('$base/$suffix')
-      .replace(queryParameters: params.isEmpty ? null : params);
+  final uri = Uri.parse('$base/$suffix');
+  if (params.isEmpty) return uri;
+  final query = params.entries
+      .map((e) =>
+          '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')
+      .join('&');
+  return uri.replace(query: query);
 }
 
 abstract class DashApiClient {
