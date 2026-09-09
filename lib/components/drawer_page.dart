@@ -15,6 +15,7 @@ class _AppDrawerState extends State<AppDrawer> {
   bool isSuperUser = true;
   bool isAttendanceExpanded = false; // Track if attendance submenu is expanded
   bool isVehicleExpanded = false; // Track if vehicle submenu is expanded
+  bool isBinExpanded = false; // Track if bin-collections submenu is expanded
 
   @override
   void initState() {
@@ -28,12 +29,16 @@ class _AppDrawerState extends State<AppDrawer> {
     final current = prefs.getString("menu");
     setState(() {
       menu = current;
-      // The Vehicle Type Dashboard is the app's home, so the Vehicle group is
-      // seeded open whenever the user is on one of its screens — otherwise
-      // "Classic" would sit hidden behind a collapsed group on the very first
-      // screen they see. Tapping the group still toggles it from here.
+      // Groups are seeded open whenever the user is already on one of their
+      // screens, so the sibling entries (e.g. "Classic") are not hidden behind a
+      // collapsed group — which matters most for the Vehicle group, since the
+      // Vehicle Type Dashboard is the app's launch screen. Tapping a group
+      // header still toggles it from here.
       isVehicleExpanded =
           current == "vehicles" || current == "vehicle_type_dashboard";
+      isBinExpanded = current == "Bin Collections" ||
+          current == "bins_dashboard" ||
+          current == "collections_dashboard";
     });
   }
 
@@ -250,14 +255,67 @@ class _AppDrawerState extends State<AppDrawer> {
 
                   },
                 ),
-                ListTile(
-                  selected: menu == "Bin Collections",
-                  leading: const Icon(Icons.qr_code_2),
-                  title: const Text("Bin Collections"),
-                  onTap: () {
-                    Navigator.pushReplacementNamed(context, '/bin_collection');
-
-                  },
+                // Bin Collections with submenu: Classic (the existing screen) +
+                // Bins + Collections.
+                Column(
+                  children: [
+                    ListTile(
+                      selected: menu == "Bin Collections" ||
+                          menu == "bins_dashboard" ||
+                          menu == "collections_dashboard",
+                      leading: const Icon(Icons.qr_code_2),
+                      title: const Text("Bin Collections"),
+                      trailing: Icon(isBinExpanded
+                          ? Icons.expand_less
+                          : Icons.expand_more),
+                      onTap: () {
+                        setState(() {
+                          isBinExpanded = !isBinExpanded;
+                        });
+                      },
+                    ),
+                    if (isBinExpanded) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(left: 24.0),
+                        child: ListTile(
+                          selected: menu == "Bin Collections",
+                          leading:
+                              const Icon(Icons.list_alt_rounded, size: 20),
+                          title: const Text("Classic"),
+                          onTap: () {
+                            Navigator.pushReplacementNamed(
+                                context, '/bin_collection');
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 24.0),
+                        child: ListTile(
+                          selected: menu == "bins_dashboard",
+                          leading: const Icon(Icons.delete_outline_rounded,
+                              size: 20),
+                          title: const Text("Bins"),
+                          onTap: () {
+                            Navigator.pushReplacementNamed(
+                                context, '/bins_dashboard');
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 24.0),
+                        child: ListTile(
+                          selected: menu == "collections_dashboard",
+                          leading:
+                              const Icon(Icons.recycling_rounded, size: 20),
+                          title: const Text("Collections"),
+                          onTap: () {
+                            Navigator.pushReplacementNamed(
+                                context, '/collections_dashboard');
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),

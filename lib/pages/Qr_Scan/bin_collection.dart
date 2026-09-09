@@ -62,6 +62,11 @@ class _BinCollectionScreenState extends State<BinCollectionScreen>
     if (username != null && password != null) {
       setState(() => isLoggedIn = true);
       print(isLoggedIn);
+      // Marks this screen as the drawer's active entry, so "Bin Collections →
+      // Classic" highlights and its group opens. Only written when logged in —
+      // this screen is also reachable unauthenticated from the login page, and
+      // that path has no drawer.
+      await prefs.setString('menu', 'Bin Collections');
     }
     await _fetchBinCollections();
   }

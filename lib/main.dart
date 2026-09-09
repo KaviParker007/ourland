@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:ourlandnew/pages/Qr_Scan/bin_collection.dart';
+import 'package:ourlandnew/pages/bins/bin_dashboard.dart';
+import 'package:ourlandnew/pages/collections/collection_dashboard.dart';
 import 'package:ourlandnew/pages/attendance/attendancePage.dart';
 import 'package:ourlandnew/pages/attendance/conflict_attendance.dart';
 import 'package:ourlandnew/pages/attendance/pending_attendance.dart';
@@ -53,6 +55,8 @@ class MyApp extends StatelessWidget {
         "/device_page": (context) => const DeviceStatusPage(),
         "/employee_page": (context) => const EmployeeDetailsPage(),
         "/bin_collection": (context) => const BinCollectionScreen(),
+        "/bins_dashboard": (context) => const BinDashboardPage(),
+        "/collections_dashboard": (context) => const CollectionDashboardPage(),
         "/conflict_page": (context) => const ConflictsPage(),
         "/notifications": (context) {
           final args = ModalRoute.of(context)!.settings.arguments
