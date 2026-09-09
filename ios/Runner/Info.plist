@@ -47,5 +47,9 @@
 		<true/>
 		<key>UIStatusBarHidden</key>
 		<false/>
+		<key>NSCameraUsageDescription</key>
+		<string>Camera access is required to capture before/after images when confirming GVP cleaning.</string>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>Location access is required to verify you are at the GVP when confirming cleaning.</string>
 	</dict>
 </plist>
