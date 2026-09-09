@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ourlandnew/pages/fuel_log/fuel_alert_dialog.dart';
+import 'package:ourlandnew/services/warning_sound.dart';
 import 'package:ourlandnew/pages/fuel_log/last_fueling_detail.dart';
 import 'package:ourlandnew/theme/dark_mode.dart';
 
@@ -54,6 +55,13 @@ Widget host(
 }
 
 void main() {
+  // No audio plugin is registered under flutter_test, and AudioPlayer waits on
+  // a creation handshake that never completes without one. Disabling it keeps
+  // these tests on the fallback cue, which is what they assert against; the
+  // synthesis and lifecycle are covered by warning_sound_test.dart.
+  setUp(() => WarningSound.disabled = true);
+  tearDown(() => WarningSound.disabled = false);
+
   group('warning dialog', () {
     testWidgets('shows the exact message returned by the API', (tester) async {
       await tester.pumpWidget(host(detail(), (_) {}));

@@ -7,29 +7,44 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:ourlandnew/services/warning_sound.dart';
+
 import 'last_fueling_detail.dart';
 
-/// Plays the warning cue.
+/// Plays the warning cue: a synthesised two-tone alarm through the shared
+/// [WarningSound] player, plus a heavy haptic on devices that have one.
 ///
-/// Uses the platform alert sound plus a heavy haptic — no audio package is in
-/// the project, so this stays dependency-free. Each cue is guarded separately so
-/// one failing does not skip the other, and any failure is swallowed: the
-/// requirement is that a silent device never blocks the user.
-///
-/// Swapping in a bundled tone (e.g. `audioplayers` + an asset) is a change to
-/// this one function; nothing else knows how the cue is produced.
+/// If the audio player is unavailable — no plugin, a browser autoplay block, a
+/// device with no audio route — it falls back to the platform alert tone, so
+/// something is still heard wherever possible. Every step is guarded
+/// independently: one failing must not skip the others, and none of them may
+/// surface an error, because sound is optional and the dialog is not.
 Future<void> playFuelWarningSound() async {
+  var played = false;
   try {
-    await SystemSound.play(SystemSoundType.alert);
+    played = await WarningSound.instance.play();
   } catch (_) {
-    // Device muted, unsupported platform, or channel error — not fatal.
+    // WarningSound already swallows its own failures; this is belt and braces.
   }
+
+  if (!played) {
+    try {
+      await SystemSound.play(SystemSoundType.alert);
+    } catch (_) {
+      // Device muted, unsupported platform, or channel error — not fatal.
+    }
+  }
+
   try {
     await HapticFeedback.heavyImpact();
   } catch (_) {
     // No vibrator, or permission withheld — not fatal.
   }
 }
+
+/// Stops the warning cue. Called when the dialog closes so a tone cannot outlive
+/// the warning that prompted it.
+Future<void> stopFuelWarningSound() => WarningSound.instance.stop();
 
 /// Shows the warning and resolves to true only when the user chose to continue.
 ///
@@ -39,8 +54,6 @@ Future<bool> showFuelAlertDialog(
   BuildContext context,
   LastFuelingDetail detail,
 ) async {
-  unawaited(playFuelWarningSound());
-
   final result = await showDialog<bool>(
     context: context,
     barrierDismissible: false,
@@ -55,9 +68,33 @@ void unawaited(Future<void> future) {
   future.catchError((_) {});
 }
 
-class _FuelAlertDialog extends StatelessWidget {
+class _FuelAlertDialog extends StatefulWidget {
   final LastFuelingDetail detail;
   const _FuelAlertDialog({required this.detail});
+
+  @override
+  State<_FuelAlertDialog> createState() => _FuelAlertDialogState();
+}
+
+class _FuelAlertDialogState extends State<_FuelAlertDialog> {
+  @override
+  void initState() {
+    super.initState();
+    // Tied to the dialog's lifetime rather than to showFuelAlertDialog, so the
+    // tone fires exactly once per open — a rebuild does not retrigger it — and
+    // is guaranteed to be stopped in dispose below.
+    unawaited(playFuelWarningSound());
+  }
+
+  @override
+  void dispose() {
+    // Whichever way the dialog closed — Cancel, Continue, or a route pop — the
+    // tone does not outlive it.
+    unawaited(stopFuelWarningSound());
+    super.dispose();
+  }
+
+  LastFuelingDetail get detail => widget.detail;
 
   /// Amber rather than the theme's error red: this is a warning the user is
   /// expected to be able to pass, not a failure.
