@@ -430,10 +430,34 @@ void main() {
   });
 
   group('canonicalBinStatus', () {
-    test('maps the documented bucket keys', () {
+    test('maps every documented bucket key', () {
+      // The backend's short keys, exactly as the dashboards return them.
       expect(canonicalBinStatus('12hr'), 'Collected in 12hr');
       expect(canonicalBinStatus('24hr'), 'Collected in 24hr');
       expect(canonicalBinStatus('48hr'), 'Collected in 48hr');
+      expect(canonicalBinStatus('ytc'), 'Yet to collect');
+      expect(canonicalBinStatus('under_maintenance'), 'Under Maintenance');
+    });
+
+    test('every documented key resolves to a real bin_status value', () {
+      // Guards against a typo in the mapping table producing a label the list
+      // endpoint would reject.
+      for (final key in const [
+        '12hr',
+        '24hr',
+        '48hr',
+        'ytc',
+        'under_maintenance',
+      ]) {
+        expect(kBinStatuses, contains(canonicalBinStatus(key)), reason: key);
+      }
+    });
+
+    test('ytc is never shown or sent raw', () {
+      // It shares no substring with "Yet to collect", so only the exact table
+      // can resolve it — this is the case that regressed.
+      expect(canonicalBinStatus('ytc'), isNot('ytc'));
+      expect(canonicalBinStatus('YTC'), 'Yet to collect');
     });
 
     test('tolerates spelling variants for the same bucket', () {
@@ -462,6 +486,82 @@ void main() {
             {'Under Maintenance', 'zzz', 'Collected in 12hr', 'aaa'}),
         ['Collected in 12hr', 'Under Maintenance', 'aaa', 'zzz'],
       );
+    });
+  });
+
+  group('the documented dashboard payload', () {
+    // Verbatim from the API.
+    final row = BinGroupRow.fromJson(
+      const {
+        'project': 'MDU',
+        'Compactor': {
+          '12hr': 1,
+          '48hr': 22,
+          'ytc': 766,
+          'under_maintenance': 4,
+        },
+        'Dumper': {'24hr': 1, '48hr': 4, 'ytc': 59},
+      },
+      labelKey: 'project',
+    );
+
+    test('Compactor maps onto the user-facing statuses', () {
+      expect(row.statusCountsFor('Compactor'), {
+        'Collected in 12hr': 1,
+        'Collected in 48hr': 22,
+        'Yet to collect': 766,
+        'Under Maintenance': 4,
+      });
+    });
+
+    test('Dumper maps onto the user-facing statuses', () {
+      expect(row.statusCountsFor('Dumper'), {
+        'Collected in 24hr': 1,
+        'Collected in 48hr': 4,
+        'Yet to collect': 59,
+      });
+    });
+
+    test('no raw backend key survives into the display map', () {
+      for (final type in const ['Compactor', 'Dumper']) {
+        final keys = row.statusCountsFor(type).keys;
+        expect(keys, isNot(contains('ytc')), reason: type);
+        expect(keys, isNot(contains('under_maintenance')), reason: type);
+        // Everything shown is a value the list endpoint accepts.
+        for (final k in keys) {
+          expect(kBinStatuses, contains(k), reason: '$type/$k');
+        }
+      }
+    });
+
+    test('totals still come straight from the API', () {
+      expect(row.count('Compactor'), 1 + 22 + 766 + 4);
+      expect(row.count('Dumper'), 1 + 4 + 59);
+      expect(row.total, 793 + 64);
+    });
+
+    test('a status the API omitted is simply absent, not zero-filled here', () {
+      // The status screen renders all five and shows 0 for the gaps; the model
+      // itself reports only what came back.
+      expect(row.statusCountsFor('Compactor').containsKey('Collected in 24hr'),
+          isFalse);
+      expect(row.statusCountsFor('Dumper').containsKey('Under Maintenance'),
+          isFalse);
+    });
+
+    test('tapping a mapped status sends the backend value', () {
+      // Yet to collect → bin_status=Yet to collect, not ytc.
+      final q = const BinQuery()
+          .drillToZones('MDU')
+          .withType('Compactor')
+          .withStatus('Yet to collect');
+      final uri =
+          buildApiUri(_host, BinEndpoints.listQueriedBins, q.binListParams());
+      expect(uri.queryParameters['bin_status'], 'Yet to collect');
+      expect(uri.toString(), contains('bin_status=Yet%20to%20collect'));
+
+      final maintenance = q.withStatus('Under Maintenance');
+      expect(maintenance.binListParams()['bin_status'], 'Under Maintenance');
     });
   });
 

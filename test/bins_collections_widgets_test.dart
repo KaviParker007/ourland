@@ -12,7 +12,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ourlandnew/components/bin_record_card.dart';
 import 'package:ourlandnew/models/bin_record.dart';
+import 'package:ourlandnew/pages/bins/bin_models.dart';
 import 'package:ourlandnew/pages/bins/bin_query.dart';
+import 'package:ourlandnew/pages/bins/bin_status_page.dart';
 import 'package:ourlandnew/pages/bins/bin_status.dart';
 import 'package:ourlandnew/pages/bins/bin_ui.dart';
 import 'package:ourlandnew/pages/collections/collection_models.dart';
@@ -200,6 +202,53 @@ void main() {
       await tester.tap(find.text('Yet to collect'));
       await tester.pump();
       expect(taps, ['Collected in 12hr', 'Yet to collect']);
+    });
+
+    testWidgets('the documented payload renders friendly labels, never raw keys',
+        (tester) async {
+      // The exact screen from the bug report: MDU › Compactor, whose payload
+      // carries `ytc` and `under_maintenance`.
+      final row = BinGroupRow.fromJson(
+        const {
+          'project': 'MDU',
+          'Compactor': {
+            '12hr': 1,
+            '48hr': 22,
+            'ytc': 766,
+            'under_maintenance': 4,
+          },
+        },
+        labelKey: 'project',
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        theme: darkMode,
+        home: BinStatusPage(
+          title: 'MDU',
+          query: const BinQuery().drillToZones('MDU').withType('Compactor'),
+          counts: row.statusCountsFor('Compactor'),
+          crumbs: const [DashCrumb('Projects'), DashCrumb('MDU')],
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // Friendly labels with the counts the API returned.
+      expect(find.text('Collected in 12hr'), findsOneWidget);
+      expect(find.text('1'), findsOneWidget);
+      expect(find.text('Collected in 48hr'), findsOneWidget);
+      expect(find.text('22'), findsOneWidget);
+      expect(find.text('Yet to collect'), findsOneWidget);
+      expect(find.text('766'), findsOneWidget);
+      expect(find.text('Under Maintenance'), findsOneWidget);
+      expect(find.text('4'), findsOneWidget);
+
+      // No raw backend key anywhere on screen.
+      expect(find.text('ytc'), findsNothing);
+      expect(find.text('under_maintenance'), findsNothing);
+
+      // The status the payload omitted still shows, as an inert zero.
+      expect(find.text('Collected in 24hr'), findsOneWidget);
+      expect(find.text('0'), findsOneWidget);
     });
 
     testWidgets('a status with no bins is inert', (tester) async {

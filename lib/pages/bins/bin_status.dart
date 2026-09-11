@@ -2,13 +2,27 @@
 //
 // The dashboard endpoints nest their counts one level below the bin type:
 //
-//   {"project": "MDU", "Compactor": {"12hr": 789}, "Dumper": {"12hr": 64}}
+//   {
+//     "project": "MDU",
+//     "Compactor": {"12hr": 1, "48hr": 22, "ytc": 766, "under_maintenance": 4},
+//     "Dumper":    {"24hr": 1, "48hr": 4,  "ytc": 59}
+//   }
 //
-// Those inner keys ARE the bin statuses. So every status count on the dashboard
-// comes straight from the API response — there is no separate status endpoint
-// and nothing is hardcoded. This file only maps the API's short bucket keys onto
-// the canonical status values the list endpoint expects, and gives each one a
-// colour and icon.
+// Those inner keys ARE the bin statuses, in the backend's short form. So every
+// count on the dashboard comes straight from the API response — there is no
+// separate status endpoint and nothing is hardcoded.
+//
+// This file is the single place those short keys become the values the rest of
+// the app uses:
+//
+//   12hr              → Collected in 12hr
+//   24hr              → Collected in 24hr
+//   48hr              → Collected in 48hr
+//   ytc               → Yet to collect
+//   under_maintenance → Under Maintenance
+//
+// The mapped value is both what the UI shows and what goes back as `bin_status`
+// on the bin-list request, so the two can never drift apart.
 
 import 'package:flutter/material.dart';
 
@@ -27,21 +41,37 @@ const List<String> kBinStatuses = <String>[
 String _normalise(String raw) =>
     raw.toLowerCase().replaceAll(RegExp('[^a-z0-9]'), '');
 
+/// The documented bucket keys, in their normalised form, mapped to the value the
+/// list endpoint expects. This table is the authority — `ytc` in particular
+/// shares no substring with "Yet to collect", so it can only be resolved by
+/// being listed here.
+const Map<String, String> _kBucketKeyToStatus = <String, String>{
+  '12hr': 'Collected in 12hr',
+  '24hr': 'Collected in 24hr',
+  '48hr': 'Collected in 48hr',
+  'ytc': 'Yet to collect',
+  'undermaintenance': 'Under Maintenance',
+};
+
 /// Maps a bucket key from a dashboard response onto a canonical [kBinStatuses]
 /// value, or returns null when it does not correspond to a known status.
 ///
-/// Deliberately tolerant: the sample payload only ever showed `12hr`, so the
-/// exact spelling of the other four buckets is not yet confirmed. Anything
-/// recognisable (`24hr`, `24_hr`, `collected_in_24hr`, `yet_to_collect`,
-/// `pending`, `under_maintenance`, `maintenance`) resolves; anything else is
-/// returned as null by this function and preserved verbatim by the caller, so an
-/// unrecognised bucket is still displayed and still drillable rather than being
-/// silently dropped.
+/// The documented keys are matched exactly; everything after that is a tolerant
+/// fallback for spellings the backend has not sent but plausibly could
+/// (`collected_in_24hr`, `yet_to_collect`, `pending`, `maintenance`). A key that
+/// matches nothing returns null and is preserved verbatim by the caller, so an
+/// unrecognised bucket is still displayed, still counted and still drillable
+/// rather than silently dropped.
 String? canonicalBinStatus(String bucketKey) {
   final k = _normalise(bucketKey);
   if (k.isEmpty) return null;
 
-  // Word-ish matches first: 'undermaintenance' contains no digits, but checking
+  // Documented keys first: exact, unambiguous, and immune to the substring
+  // rules below ever being reordered.
+  final documented = _kBucketKeyToStatus[k];
+  if (documented != null) return documented;
+
+  // Word-ish matches next: 'undermaintenance' contains no digits, but checking
   // these before the hour buckets keeps a key like 'maintenance24' unambiguous.
   if (k.contains('maint')) return 'Under Maintenance';
   if (k.contains('yet') ||
