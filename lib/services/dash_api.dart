@@ -5,7 +5,6 @@
 //
 //   • HTTP Basic auth pulled from SharedPreferences (the app-wide mechanism)
 //   • query-param cleaning and URI building
-//   • boxed request/response logging with the auth header masked
 //   • status-code → user-facing message mapping
 //   • tolerant list decoding (bare list, or a `results` / `data` envelope)
 //
@@ -19,7 +18,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ourlandnew/config.dart';
@@ -92,32 +91,6 @@ abstract class DashApiClient {
     return {'Content-Type': 'application/json', 'authorization': auth};
   }
 
-  // ── Logging ─────────────────────────────────────────────────────────────────
-
-  void logBox({required String title, required List<String> lines}) {
-    const bar = '══════════════════════════════════════════════════════════';
-    final buffer = StringBuffer()
-      ..writeln('\n╔$bar')
-      ..writeln('║ $title')
-      ..writeln('╟$bar');
-    for (final line in lines) {
-      for (final sub in line.split('\n')) {
-        buffer.writeln('║ $sub');
-      }
-    }
-    buffer.write('╚$bar');
-    // ignore: avoid_print
-    print(buffer.toString());
-  }
-
-  Map<String, String> maskHeaders(Map<String, String> headers) {
-    final masked = Map<String, String>.from(headers);
-    if (masked.containsKey('authorization')) {
-      masked['authorization'] = 'Basic ****** (masked)';
-    }
-    return masked;
-  }
-
   // ── Error mapping ───────────────────────────────────────────────────────────
 
   Never mapError(Object e) {
@@ -179,42 +152,9 @@ abstract class DashApiClient {
 
   // ── Logged GET ──────────────────────────────────────────────────────────────
 
-  Future<http.Response> loggedGet(Uri uri, Map<String, String> headers) async {
-    logBox(title: '$logTag ▶ REQUEST', lines: [
-      'Method        : GET',
-      'API URL       : ${uri.scheme}://${uri.authority}${uri.path}',
-      'Query Params  : '
-          '${uri.queryParameters.isEmpty ? '(none)' : uri.queryParameters}',
-      'Headers       : ${maskHeaders(headers)}',
-    ]);
-    final sw = Stopwatch()..start();
-    try {
-      final resp = await http.get(uri, headers: headers).timeout(timeout);
-      sw.stop();
-      final isError = resp.statusCode < 200 || resp.statusCode >= 300;
-      logBox(
-        title: isError
-            ? '$logTag ✖ RESPONSE (${resp.statusCode})'
-            : '$logTag ✔ RESPONSE (${resp.statusCode})',
-        lines: [
-          'API URL       : ${uri.scheme}://${uri.authority}${uri.path}',
-          'Status Code   : ${resp.statusCode}',
-          'Execution Time: ${sw.elapsed.inMilliseconds} ms',
-          '${isError ? 'Error Response' : 'Response Body '}: '
-              '${resp.body.isEmpty ? '(empty)' : resp.body}',
-        ],
-      );
-      return resp;
-    } catch (e) {
-      sw.stop();
-      logBox(title: '$logTag ✖ REQUEST FAILED', lines: [
-        'API URL       : ${uri.scheme}://${uri.authority}${uri.path}',
-        'Execution Time: ${sw.elapsed.inMilliseconds} ms',
-        'Error         : $e',
-      ]);
-      rethrow;
-    }
-  }
+  // Logging is done by services/http_client.dart for every request.
+  Future<http.Response> loggedGet(Uri uri, Map<String, String> headers) =>
+      http.get(uri, headers: headers).timeout(timeout);
 
   /// GET [path] and map each object in the response through [parse]. Non-object
   /// entries are skipped rather than throwing, so one malformed row cannot take

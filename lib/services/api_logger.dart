@@ -4,6 +4,9 @@
 // status code and response — or an ERROR block when the call fails or returns a
 // non-2xx status.
 //
+// Every request made through services/http_client.dart is logged here
+// automatically; call sites do not need to call `logApiCall` themselves.
+//
 // Two deliberate properties:
 //
 //  • Credentials are never printed. The `authorization` header is masked, so a
@@ -124,7 +127,7 @@ void logApiCall({
       _formatBody(body is String ? body : jsonEncode(body)),
     ],
     'Status Code: ${statusCode ?? '(no response — request failed)'}',
-    if (elapsedMs != null) 'Duration: $elapsedMs ms',
+    if (elapsedMs != null) 'Execution Time: $elapsedMs ms',
     '',
     if (error != null) ...[
       'Error:',

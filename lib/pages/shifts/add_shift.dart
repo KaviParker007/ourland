@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:dropdown_search/dropdown_search.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ourlandnew/components/input_fields.dart';

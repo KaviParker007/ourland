@@ -6,10 +6,8 @@ import "package:ourlandnew/components/buttons.dart";
 import "package:ourlandnew/components/input_fields.dart";
 import "package:ourlandnew/components/label.dart";
 import "package:ourlandnew/config.dart";
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 import "package:ourlandnew/pages/login.dart";
-import "package:ourlandnew/services/api_logger.dart";
-import "package:ourlandnew/services/fuel_log_api_tag.dart";
 
 import "fuel_alert_dialog.dart";
 import "last_fueling_detail.dart";
@@ -168,18 +166,7 @@ class _AddFuelLogState extends State<AddFuelLog> {
         'authorization': auth
       };
 
-      final sw = Stopwatch()..start();
       var response = await http.get(uri, headers: headers);
-      sw.stop();
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'GET',
-        uri: uri,
-        headers: headers,
-        statusCode: response.statusCode,
-        responseBody: response.body,
-        elapsedMs: sw.elapsedMilliseconds,
-      );
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
@@ -206,13 +193,6 @@ class _AddFuelLogState extends State<AddFuelLog> {
         );
       }
     } catch (e) {
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'GET',
-        uri: Uri.parse(
-            "$baseUrl/drf_get_last_fueling_detail/?vehicle_id=$vehicleId"),
-        error: e,
-      );
       setState(() {
         lastFuelDetails = LastFuelingDetail.empty;
         _applyLastFuelDetails();
@@ -247,42 +227,9 @@ class _AddFuelLogState extends State<AddFuelLog> {
         }
       }
 
-      final sw = Stopwatch()..start();
       var streamedResponse = await request.send();
-      var response = await http.Response.fromStream(streamedResponse);
-      sw.stop();
-
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'POST',
-        uri: uri,
-        headers: request.headers,
-        fields: request.fields,
-        files: [
-          for (final f in request.files)
-            '${f.field} -> ${f.filename} (${f.length} bytes)',
-        ],
-        statusCode: response.statusCode,
-        responseBody: response.body,
-        elapsedMs: sw.elapsedMilliseconds,
-      );
-
-      return response;
+      return await http.Response.fromStream(streamedResponse);
     } catch (e) {
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'POST',
-        uri: Uri.parse("$baseUrl/drf-add-fuel-log/"),
-        fields: {
-          for (final entry in data.entries) entry.key: entry.value.toString(),
-        },
-        files: [
-          for (final entry in images.entries)
-            if (entry.value != null && entry.value.toString().isNotEmpty)
-              '${entry.key} -> ${entry.value}',
-        ],
-        error: e,
-      );
       errorMsg(e.toString());
       return http.Response("Error", 500);
     }
@@ -395,19 +342,8 @@ class _AddFuelLogState extends State<AddFuelLog> {
     var auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
     var headers = {'Content-Type': 'application/json', 'authorization': auth};
 
-    final sw = Stopwatch()..start();
     try {
       var fuelStationResponse = await http.get(vehicleFuelUri, headers: headers);
-      sw.stop();
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'GET',
-        uri: vehicleFuelUri,
-        headers: headers,
-        statusCode: fuelStationResponse.statusCode,
-        responseBody: fuelStationResponse.body,
-        elapsedMs: sw.elapsedMilliseconds,
-      );
 
       if (fuelStationResponse.statusCode == 200) {
         setState(() {
@@ -416,16 +352,8 @@ class _AddFuelLogState extends State<AddFuelLog> {
           fuelStations = vehicleAndFuelStations['fuelstation_list'];
         });
       }
-    } catch (e) {
-      sw.stop();
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'GET',
-        uri: vehicleFuelUri,
-        headers: headers,
-        error: e,
-        elapsedMs: sw.elapsedMilliseconds,
-      );
+    } catch (_) {
+      // Already logged by the HTTP client; the dropdowns stay empty.
     }
   }
 

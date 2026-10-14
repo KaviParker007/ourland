@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -83,91 +83,9 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
     return {'shift_status': _shiftStatus, 'date': _dateStr};
   }
 
-  // ── API debug logging ───────────────────────────────────────────────────────
-  // Every dashboard request goes through _loggedGet, which prints a boxed
-  // REQUEST block (method, URL, query params, headers, body) and a RESPONSE
-  // block (status code, headers, body) — or a REQUEST FAILED block on a network
-  // error. The Authorization credential is masked. Logging never alters the
-  // returned response or the module's behaviour.
-
-  /// Returns a copy of [headers] with the Authorization value masked.
-  Map<String, String> _maskHeaders(Map<String, String> headers) {
-    final masked = Map<String, String>.from(headers);
-    if (masked.containsKey('authorization')) {
-      masked['authorization'] = 'Basic ****** (masked)';
-    }
-    return masked;
-  }
-
-  /// Pretty-prints a JSON body for readable console output; falls back to the
-  /// raw text when it is not valid JSON.
-  String _prettyBody(String raw) {
-    if (raw.isEmpty) return '(empty)';
-    try {
-      return const JsonEncoder.withIndent('  ').convert(jsonDecode(raw));
-    } catch (_) {
-      return raw;
-    }
-  }
-
-  void _logBox(String title, List<String> lines) {
-    const bar = '══════════════════════════════════════════════════════════';
-    final buffer = StringBuffer()
-      ..writeln('\n╔$bar')
-      ..writeln('║ $title')
-      ..writeln('╟$bar');
-    for (final line in lines) {
-      // Split embedded newlines (pretty JSON) so each physical line keeps the
-      // box prefix and stays aligned.
-      for (final sub in line.split('\n')) {
-        buffer.writeln('║ $sub');
-      }
-    }
-    buffer.write('╚$bar');
-    // ignore: avoid_print
-    print(buffer.toString());
-  }
-
-  /// Performs a GET with full request/response logging and returns the raw
-  /// response for the caller to handle. Network errors are logged then
-  /// rethrown so the existing error handling is preserved.
-  Future<http.Response> _loggedGet(Uri uri) async {
-    const method = 'GET';
-    _logBox('SHIFT API ▶ REQUEST', [
-      'Method        : $method',
-      'URL           : $uri',
-      'Query Params  : '
-          '${uri.queryParameters.isEmpty ? '(none)' : uri.queryParameters}',
-      'Headers       : ${_maskHeaders(_authHeaders)}',
-      'Body/Payload  : (none)',
-    ]);
-    try {
-      final resp = await http.get(uri, headers: _authHeaders);
-      final isError = resp.statusCode < 200 || resp.statusCode >= 300;
-      _logBox(
-        isError
-            ? 'SHIFT API ✖ RESPONSE (${resp.statusCode})'
-            : 'SHIFT API ✔ RESPONSE (${resp.statusCode})',
-        [
-          'Method        : $method',
-          'URL           : $uri',
-          'Status Code   : ${resp.statusCode}',
-          'Resp Headers  : ${resp.headers}',
-          isError
-              ? 'Error Response: ${_prettyBody(resp.body)}'
-              : 'Response Body : ${_prettyBody(resp.body)}',
-        ],
-      );
-      return resp;
-    } catch (e) {
-      _logBox('SHIFT API ✖ REQUEST FAILED', [
-        'Method        : $method',
-        'URL           : $uri',
-        'Error         : $e',
-      ]);
-      rethrow;
-    }
-  }
+  /// Authenticated GET. Logging is done by services/http_client.dart.
+  Future<http.Response> _loggedGet(Uri uri) =>
+      http.get(uri, headers: _authHeaders);
 
   Future<void> _fetchProjects() async {
     setState(() {

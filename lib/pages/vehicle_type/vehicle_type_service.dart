@@ -8,7 +8,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:ourlandnew/config.dart';
@@ -146,68 +146,9 @@ class VehicleDashboardApi {
     return const [];
   }
 
-  // ── Logged GET ──────────────────────────────────────────────────────────────
-
-  void _logApi({required String title, required List<String> lines}) {
-    const bar = '══════════════════════════════════════════════════════════';
-    final buffer = StringBuffer()
-      ..writeln('\n╔$bar')
-      ..writeln('║ $title')
-      ..writeln('╟$bar');
-    for (final line in lines) {
-      for (final sub in line.split('\n')) {
-        buffer.writeln('║ $sub');
-      }
-    }
-    buffer.write('╚$bar');
-    // ignore: avoid_print
-    print(buffer.toString());
-  }
-
-  Map<String, String> _maskHeaders(Map<String, String> headers) {
-    final masked = Map<String, String>.from(headers);
-    if (masked.containsKey('authorization')) {
-      masked['authorization'] = 'Basic ****** (masked)';
-    }
-    return masked;
-  }
-
-  Future<http.Response> _get(Uri uri, Map<String, String> headers) async {
-    _logApi(title: 'VEHICLE API ▶ REQUEST', lines: [
-      'Method        : GET',
-      'API URL       : ${uri.scheme}://${uri.authority}${uri.path}',
-      'Query Params  : '
-          '${uri.queryParameters.isEmpty ? '(none)' : uri.queryParameters}',
-      'Headers       : ${_maskHeaders(headers)}',
-    ]);
-    final sw = Stopwatch()..start();
-    try {
-      final resp = await http.get(uri, headers: headers).timeout(_timeout);
-      sw.stop();
-      final isError = resp.statusCode < 200 || resp.statusCode >= 300;
-      _logApi(
-        title: isError
-            ? 'VEHICLE API ✖ RESPONSE (${resp.statusCode})'
-            : 'VEHICLE API ✔ RESPONSE (${resp.statusCode})',
-        lines: [
-          'API URL       : ${uri.scheme}://${uri.authority}${uri.path}',
-          'Status Code   : ${resp.statusCode}',
-          'Execution Time: ${sw.elapsed.inMilliseconds} ms',
-          '${isError ? 'Error Response' : 'Response Body '}: '
-              '${resp.body.isEmpty ? '(empty)' : resp.body}',
-        ],
-      );
-      return resp;
-    } catch (e) {
-      sw.stop();
-      _logApi(title: 'VEHICLE API ✖ REQUEST FAILED', lines: [
-        'API URL       : ${uri.scheme}://${uri.authority}${uri.path}',
-        'Execution Time: ${sw.elapsed.inMilliseconds} ms',
-        'Error         : $e',
-      ]);
-      rethrow;
-    }
-  }
+  // Logging is done by services/http_client.dart for every request.
+  Future<http.Response> _get(Uri uri, Map<String, String> headers) =>
+      http.get(uri, headers: headers).timeout(_timeout);
 
   Future<List<T>> _fetchList<T>(
     String path,
@@ -328,19 +269,8 @@ class VehicleDashboardApi {
         'reason': reason,
         'idle_date': idleDate,
       });
-      _logApi(title: 'VEHICLE API ▶ REQUEST', lines: [
-        'Method        : POST',
-        'API URL       : $uri',
-        'Headers       : ${_maskHeaders(headers)}',
-        'Body/Payload  : $body',
-      ]);
       final resp =
           await http.post(uri, headers: headers, body: body).timeout(_timeout);
-      _logApi(title: 'VEHICLE API ◀ RESPONSE (${resp.statusCode})', lines: [
-        'API URL       : $uri',
-        'Status Code   : ${resp.statusCode}',
-        'Response Body : ${resp.body.isEmpty ? '(empty)' : resp.body}',
-      ]);
       if (resp.statusCode != 200 && resp.statusCode != 201) {
         throw _fromResponse(resp);
       }

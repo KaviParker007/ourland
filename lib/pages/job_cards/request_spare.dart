@@ -1,28 +1,22 @@
 import "dart:convert";
 import "package:flutter/material.dart";
 import "package:shared_preferences/shared_preferences.dart";
-import "package:ourlandnew/components/buttons.dart";
 import "package:ourlandnew/config.dart";
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 import "package:ourlandnew/pages/login.dart";
 
-class SpareItem {
-  final int id;
-  final String name;
+import 'inventory_service.dart';
 
-  SpareItem({required this.id, required this.name});
-
-  factory SpareItem.fromJson(Map<String, dynamic> json) {
-    return SpareItem(id: json['id'], name: json['name']);
-  }
-}
-
+/// One spare row. The item is picked in three steps — type, then subtype, then
+/// item — and each step is cleared when an earlier one changes.
 class SelectedSpare {
-  SpareItem item;
+  InventoryItemType? itemType;
+  InventoryItemSubtype? itemSubtype;
+  InventoryItem? item;
   int quantity;
   String remark;
 
-  SelectedSpare({required this.item, this.quantity = 1, this.remark = ''});
+  SelectedSpare({this.quantity = 1, this.remark = ''});
 }
 
 class RequestSpare extends StatefulWidget {
@@ -43,8 +37,14 @@ class _RequestSpareState extends State<RequestSpare> {
   String? username;
   String? password;
 
-  List<SpareItem> availableItems = [];
+  InventoryService? inventory;
+  List<InventoryItemType> itemTypes = [];
+  String? itemTypesError;
   List<SelectedSpare> selectedSpares = [];
+
+  // Shared across rows so picking the same type/subtype twice does not refetch.
+  final Map<int, Future<List<InventoryItemSubtype>>> _subtypeCache = {};
+  final Map<String, Future<List<InventoryItem>>> _itemCache = {};
 
   @override
   void initState() {
@@ -63,45 +63,55 @@ class _RequestSpareState extends State<RequestSpare> {
         isLoggedIn = true;
         username = user;
         password = pass;
+        inventory = InventoryService(username: user, password: pass);
       });
-      await fetchSpareItems();
+      await fetchItemTypes();
     }
     setState(() => isStarting = false);
   }
 
-  Future<void> fetchSpareItems() async {
-    setState(() => isLoadingItems = true);
+  Future<void> fetchItemTypes() async {
+    setState(() {
+      isLoadingItems = true;
+      itemTypesError = null;
+    });
     try {
-      var uri = Uri.parse("$baseUrl/drf_request_spare_v2/");
-      var auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
-      var headers = {'Content-Type': 'application/json', 'authorization': auth};
-      var response = await http.get(uri, headers: headers);
-      if (response.statusCode == 200) {
-        var decoded = jsonDecode(response.body);
-        List<dynamic> items = decoded['items'] ?? [];
-        setState(() {
-          availableItems = items.map((e) => SpareItem.fromJson(e)).toList();
-        });
-      } else {
-        errorMsg("Failed to load spare items");
-      }
-    } catch (e) {
-      errorMsg("Error loading items: $e");
+      final types = await inventory!.fetchItemTypes();
+      setState(() => itemTypes = types);
+    } on InventoryApiException catch (e) {
+      setState(() => itemTypesError = e.message);
     }
     setState(() => isLoadingItems = false);
   }
 
-  void addSpareRow() {
-    if (availableItems.isEmpty) return;
-
-    // Pick the first item not already selected, or default to first
-    SpareItem defaultItem = availableItems.firstWhere(
-          (item) => !selectedSpares.any((s) => s.item.id == item.id),
-      orElse: () => availableItems.first,
+  /// Cached per item type; a failed request is dropped from the cache so the
+  /// row's Retry fetches again.
+  Future<List<InventoryItemSubtype>> subtypesFor(int itemTypeId) {
+    return _subtypeCache.putIfAbsent(
+      itemTypeId,
+      () => inventory!.fetchItemSubtypes(itemTypeId)
+        ..catchError((Object _) {
+          _subtypeCache.remove(itemTypeId);
+          return const <InventoryItemSubtype>[];
+        }),
     );
+  }
 
+  Future<List<InventoryItem>> itemsFor(int itemTypeId, int itemSubtypeId) {
+    final key = '$itemTypeId-$itemSubtypeId';
+    return _itemCache.putIfAbsent(
+      key,
+      () => inventory!.fetchItems(itemTypeId, itemSubtypeId)
+        ..catchError((Object _) {
+          _itemCache.remove(key);
+          return const <InventoryItem>[];
+        }),
+    );
+  }
+
+  void addSpareRow() {
     setState(() {
-      selectedSpares.add(SelectedSpare(item: defaultItem));
+      selectedSpares.add(SelectedSpare());
     });
   }
 
@@ -115,6 +125,13 @@ class _RequestSpareState extends State<RequestSpare> {
     if (selectedSpares.isEmpty) {
       errorMsg("Please add at least one spare item.");
       return;
+    }
+
+    for (var i = 0; i < selectedSpares.length; i++) {
+      if (selectedSpares[i].item == null) {
+        errorMsg("Please select an item for spare ${i + 1}.");
+        return;
+      }
     }
 
     // Validate quantities
@@ -140,29 +157,18 @@ class _RequestSpareState extends State<RequestSpare> {
         "id": widget.jobCardId,
         "spares": selectedSpares
             .map((s) => {
-          "item": s.item.id,
+          "item": s.item!.id,
           "quantity_requested": s.quantity,
           "request_remark": s.remark,
         })
             .toList(),
       };
 
-      // PRINT REQUEST DATA
-      print("========== API REQUEST ==========");
-      print("URL: $uri");
-      print("Headers: $headers");
-      print("Body: ${jsonEncode(body)}");
-
       var response = await http.post(
         uri,
         headers: headers,
         body: jsonEncode(body),
       );
-
-      // PRINT RESPONSE DATA
-      print("========== API RESPONSE ==========");
-      print("Status Code: ${response.statusCode}");
-      print("Response Body: ${response.body}");
 
       var decoded = jsonDecode(response.body);
 
@@ -191,9 +197,6 @@ class _RequestSpareState extends State<RequestSpare> {
         }
       }
     } catch (e) {
-      print("========== API ERROR ==========");
-      print("Error: $e");
-
       errorMsg("Error: $e");
     }
 
@@ -241,7 +244,31 @@ class _RequestSpareState extends State<RequestSpare> {
                 child: ListView(
                   padding: const EdgeInsets.all(15),
                   children: [
-                    if (selectedSpares.isEmpty)
+                    if (itemTypesError != null)
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            children: [
+                              Icon(Icons.error_outline,
+                                  size: 40,
+                                  color: Theme.of(context).colorScheme.error),
+                              const SizedBox(height: 10),
+                              Text(
+                                "Could not load item types.\n$itemTypesError",
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 10),
+                              OutlinedButton.icon(
+                                onPressed: fetchItemTypes,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text("Retry"),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else if (selectedSpares.isEmpty)
                       Card(
                         child: Padding(
                           padding: const EdgeInsets.all(30),
@@ -252,7 +279,9 @@ class _RequestSpareState extends State<RequestSpare> {
                                   color: Theme.of(context).colorScheme.outline),
                               const SizedBox(height: 10),
                               Text(
-                                "No spares added yet.\nTap '+ Add Spare' to begin.",
+                                itemTypes.isEmpty
+                                    ? "No active item types available."
+                                    : "No spares added yet.\nTap '+ Add Spare' to begin.",
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                     color: Theme.of(context).colorScheme.outline),
@@ -265,17 +294,31 @@ class _RequestSpareState extends State<RequestSpare> {
                       int index = entry.key;
                       SelectedSpare spare = entry.value;
                       return _SpareRowCard(
-                        key: ValueKey(index),
+                        key: ObjectKey(spare),
+                        index: index,
                         spare: spare,
-                        availableItems: availableItems,
+                        itemTypes: itemTypes,
+                        loadSubtypes: subtypesFor,
+                        loadItems: itemsFor,
                         selectedItemIds: selectedSpares
-                            .where((s) => s != spare)
-                            .map((s) => s.item.id)
+                            .where((s) => s != spare && s.item != null)
+                            .map((s) => s.item!.id)
                             .toList(),
-                        onItemChanged: (SpareItem? newItem) {
-                          if (newItem != null) {
-                            setState(() => spare.item = newItem);
-                          }
+                        onItemTypeChanged: (InventoryItemType? type) {
+                          setState(() {
+                            spare.itemType = type;
+                            spare.itemSubtype = null;
+                            spare.item = null;
+                          });
+                        },
+                        onSubtypeChanged: (InventoryItemSubtype? subtype) {
+                          setState(() {
+                            spare.itemSubtype = subtype;
+                            spare.item = null;
+                          });
+                        },
+                        onItemChanged: (InventoryItem? newItem) {
+                          setState(() => spare.item = newItem);
                         },
                         onQuantityChanged: (int qty) {
                           setState(() => spare.quantity = qty);
@@ -288,7 +331,7 @@ class _RequestSpareState extends State<RequestSpare> {
                     }),
                     const SizedBox(height: 10),
                     OutlinedButton.icon(
-                      onPressed: availableItems.isEmpty ? null : addSpareRow,
+                      onPressed: itemTypes.isEmpty ? null : addSpareRow,
                       icon: const Icon(Icons.add),
                       label: const Text("Add Spare"),
                     ),
@@ -319,19 +362,30 @@ class _RequestSpareState extends State<RequestSpare> {
 }
 
 class _SpareRowCard extends StatefulWidget {
+  final int index;
   final SelectedSpare spare;
-  final List<SpareItem> availableItems;
+  final List<InventoryItemType> itemTypes;
+  final Future<List<InventoryItemSubtype>> Function(int itemTypeId) loadSubtypes;
+  final Future<List<InventoryItem>> Function(int itemTypeId, int itemSubtypeId)
+      loadItems;
   final List<int> selectedItemIds;
-  final ValueChanged<SpareItem?> onItemChanged;
+  final ValueChanged<InventoryItemType?> onItemTypeChanged;
+  final ValueChanged<InventoryItemSubtype?> onSubtypeChanged;
+  final ValueChanged<InventoryItem?> onItemChanged;
   final ValueChanged<int> onQuantityChanged;
   final ValueChanged<String> onRemarkChanged;
   final VoidCallback onRemove;
 
   const _SpareRowCard({
     super.key,
+    required this.index,
     required this.spare,
-    required this.availableItems,
+    required this.itemTypes,
+    required this.loadSubtypes,
+    required this.loadItems,
     required this.selectedItemIds,
+    required this.onItemTypeChanged,
+    required this.onSubtypeChanged,
     required this.onItemChanged,
     required this.onQuantityChanged,
     required this.onRemarkChanged,
@@ -345,6 +399,14 @@ class _SpareRowCard extends StatefulWidget {
 class _SpareRowCardState extends State<_SpareRowCard> {
   late TextEditingController _remarkController;
   late TextEditingController _quantityController;
+
+  List<InventoryItemSubtype> _subtypes = [];
+  bool _loadingSubtypes = false;
+  String? _subtypeError;
+
+  List<InventoryItem> _items = [];
+  bool _loadingItems = false;
+  String? _itemError;
 
   @override
   void initState() {
@@ -361,15 +423,149 @@ class _SpareRowCardState extends State<_SpareRowCard> {
     super.dispose();
   }
 
-  // Items available for this row: current item + unselected items
-  List<SpareItem> get dropdownItems => widget.availableItems
+  Future<void> _loadSubtypes() async {
+    final type = widget.spare.itemType;
+    if (type == null) return;
+    setState(() {
+      _loadingSubtypes = true;
+      _subtypeError = null;
+      _subtypes = [];
+      _items = [];
+      _itemError = null;
+    });
+    try {
+      final subtypes = await widget.loadSubtypes(type.id);
+      // Ignore a late response for a type the user has since changed.
+      if (!mounted || widget.spare.itemType?.id != type.id) return;
+      setState(() => _subtypes = subtypes);
+    } on InventoryApiException catch (e) {
+      if (!mounted || widget.spare.itemType?.id != type.id) return;
+      setState(() => _subtypeError = e.message);
+    }
+    if (mounted) setState(() => _loadingSubtypes = false);
+  }
+
+  Future<void> _loadItems() async {
+    final type = widget.spare.itemType;
+    final subtype = widget.spare.itemSubtype;
+    if (type == null || subtype == null) return;
+    setState(() {
+      _loadingItems = true;
+      _itemError = null;
+      _items = [];
+    });
+    try {
+      final items = await widget.loadItems(type.id, subtype.id);
+      if (!mounted || widget.spare.itemSubtype?.id != subtype.id) return;
+      setState(() => _items = items);
+    } on InventoryApiException catch (e) {
+      if (!mounted || widget.spare.itemSubtype?.id != subtype.id) return;
+      setState(() => _itemError = e.message);
+    }
+    if (mounted) setState(() => _loadingItems = false);
+  }
+
+  // Items available for this row: current item + items not picked elsewhere
+  List<InventoryItem> get dropdownItems => _items
       .where((item) =>
-  item.id == widget.spare.item.id ||
+  item.id == widget.spare.item?.id ||
       !widget.selectedItemIds.contains(item.id))
       .toList();
 
+  InputDecoration _decoration(String hint) => InputDecoration(
+        hintText: hint,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+      );
+
+  Widget _label(String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(text, style: Theme.of(context).textTheme.labelLarge),
+      );
+
+  /// Spinner, error with Retry, or an empty-list note under a dropdown.
+  Widget _status({
+    required bool loading,
+    required String? error,
+    required bool empty,
+    required String emptyText,
+    required VoidCallback onRetry,
+  }) {
+    if (loading) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 8),
+        child: LinearProgressIndicator(),
+      );
+    }
+    if (error != null) {
+      return Row(
+        children: [
+          Expanded(
+            child: Text(error,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+          TextButton(onPressed: onRetry, child: const Text("Retry")),
+        ],
+      );
+    }
+    if (empty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text(emptyText,
+            style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  Widget _itemDetails(InventoryItem item) {
+    final rows = <(String, String?)>[
+      ("Item Code", item.itemCode),
+      ("Brand", item.brandName),
+      ("Model No.", item.modelNumber),
+      ("Unit", item.unitOfMeasure),
+      ("Description", item.description),
+    ].where((r) => r.$2 != null).toList();
+    if (rows.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final (label, value) in rows)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 95,
+                    child: Text(label,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.outline)),
+                  ),
+                  Expanded(child: Text(value!)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final spare = widget.spare;
+    final items = dropdownItems;
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -381,7 +577,7 @@ class _SpareRowCardState extends State<_SpareRowCard> {
               children: [
                 Expanded(
                   child: Text(
-                    "Spare Item",
+                    "Spare Item ${widget.index + 1}",
                     style: Theme.of(context).textTheme.labelLarge,
                   ),
                 ),
@@ -393,27 +589,100 @@ class _SpareRowCardState extends State<_SpareRowCard> {
                 ),
               ],
             ),
-            const SizedBox(height: 6),
-            DropdownButtonFormField<SpareItem>(
-              value: dropdownItems.any((i) => i.id == widget.spare.item.id)
-                  ? dropdownItems.firstWhere((i) => i.id == widget.spare.item.id)
-                  : dropdownItems.isNotEmpty
-                  ? dropdownItems.first
-                  : null,
-              decoration: InputDecoration(
-                contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8)),
-              ),
-              items: dropdownItems
-                  .map((item) => DropdownMenuItem<SpareItem>(
-                value: item,
-                child: Text(item.name),
-              ))
+
+            // Step 1 — item type
+            _label("Item Type"),
+            DropdownButtonFormField<int>(
+              initialValue: spare.itemType?.id,
+              isExpanded: true,
+              decoration: _decoration("Select item type"),
+              items: widget.itemTypes
+                  .map((t) => DropdownMenuItem<int>(
+                        value: t.id,
+                        child: Text(t.label, overflow: TextOverflow.ellipsis),
+                      ))
                   .toList(),
-              onChanged: widget.onItemChanged,
+              onChanged: (id) {
+                if (id == null || id == spare.itemType?.id) return;
+                widget.onItemTypeChanged(
+                    widget.itemTypes.firstWhere((t) => t.id == id));
+                _loadSubtypes();
+              },
             ),
+
+            // Step 2 — subtype
+            const SizedBox(height: 12),
+            _label("Item Subtype"),
+            DropdownButtonFormField<int>(
+              // Rebuilt per type so the selection clears when the type changes.
+              key: ValueKey('subtype-${spare.itemType?.id}'),
+              initialValue: spare.itemSubtype?.id,
+              isExpanded: true,
+              decoration: _decoration(spare.itemType == null
+                  ? "Select an item type first"
+                  : "Select item subtype"),
+              items: _subtypes
+                  .map((s) => DropdownMenuItem<int>(
+                        value: s.id,
+                        child: Text(s.name, overflow: TextOverflow.ellipsis),
+                      ))
+                  .toList(),
+              onChanged: spare.itemType == null || _loadingSubtypes
+                  ? null
+                  : (id) {
+                      if (id == null || id == spare.itemSubtype?.id) return;
+                      widget.onSubtypeChanged(
+                          _subtypes.firstWhere((s) => s.id == id));
+                      _loadItems();
+                    },
+            ),
+            if (spare.itemType != null)
+              _status(
+                loading: _loadingSubtypes,
+                error: _subtypeError,
+                empty: _subtypes.isEmpty,
+                emptyText: "No active subtypes for this item type.",
+                onRetry: _loadSubtypes,
+              ),
+
+            // Step 3 — item
+            const SizedBox(height: 12),
+            _label("Item"),
+            DropdownButtonFormField<int>(
+              key: ValueKey(
+                  'item-${spare.itemType?.id}-${spare.itemSubtype?.id}'),
+              initialValue: spare.item?.id,
+              isExpanded: true,
+              decoration: _decoration(spare.itemSubtype == null
+                  ? "Select a subtype first"
+                  : "Select item"),
+              items: items
+                  .map((item) => DropdownMenuItem<int>(
+                        value: item.id,
+                        child:
+                            Text(item.name, overflow: TextOverflow.ellipsis),
+                      ))
+                  .toList(),
+              onChanged: spare.itemSubtype == null || _loadingItems
+                  ? null
+                  : (id) {
+                      if (id == null) return;
+                      widget.onItemChanged(
+                          _items.firstWhere((i) => i.id == id));
+                    },
+            ),
+            if (spare.itemSubtype != null)
+              _status(
+                loading: _loadingItems,
+                error: _itemError,
+                empty: items.isEmpty,
+                emptyText: _items.isEmpty
+                    ? "No active items for this subtype."
+                    : "All items in this subtype are already added.",
+                onRetry: _loadItems,
+              ),
+            if (spare.item != null) _itemDetails(spare.item!),
+
             const SizedBox(height: 12),
             Text("Quantity", style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 6),

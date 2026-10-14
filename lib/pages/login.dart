@@ -6,7 +6,7 @@ import 'package:ourlandnew/components/buttons.dart';
 import 'package:ourlandnew/components/label.dart';
 import 'package:ourlandnew/components/input_fields.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 
 import '../components/app_version.dart';
 import '../config.dart';

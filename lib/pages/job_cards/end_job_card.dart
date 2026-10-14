@@ -1,11 +1,12 @@
 import "dart:convert";
 import "package:flutter/material.dart";
+import "package:flutter/services.dart";
 import "package:shared_preferences/shared_preferences.dart";
 import "package:ourlandnew/components/buttons.dart";
 import "package:ourlandnew/components/input_fields.dart";
 import "package:ourlandnew/components/label.dart";
 import "package:ourlandnew/config.dart";
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 import "package:ourlandnew/pages/login.dart";
 
 class EndJobCard extends StatefulWidget {
@@ -24,6 +25,8 @@ class _EndJobCardState extends State<EndJobCard> {
   String? username;
   String? password;
   TextEditingController remarkController = TextEditingController();
+  TextEditingController additionalCostController =
+      TextEditingController(text: "0.00");
 
   @override
   void initState() {
@@ -32,7 +35,7 @@ class _EndJobCardState extends State<EndJobCard> {
   }
 
   Future<http.Response> endJobCard(String body) async {
-    var uri = Uri.parse("$baseUrl/drf-end-job-card/");
+    var uri = Uri.parse("$baseUrl/drf_end_job_card_v2/");
     var auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
     var headers = {'Content-Type': 'application/json', 'authorization': auth};
     var response = await http.post(uri, headers: headers, body: body);
@@ -44,18 +47,30 @@ class _EndJobCardState extends State<EndJobCard> {
       isLoading = true;
     });
     String? remark = remarkController.text;
+    String costText = additionalCostController.text.trim();
+    double? additionalCost = costText.isEmpty ? 0 : double.tryParse(costText);
+    if (additionalCost == null || additionalCost < 0) {
+      errorMsg("Enter a valid additional cost");
+      setState(() {
+        isLoading = false;
+      });
+      return;
+    }
 
     var body = {
       "id": widget.jobCardId,
-      "vehicle_incharge_remark": remark
+      "vehicle_incharge_remark": remark,
+      "additional_cost": additionalCost.toStringAsFixed(2)
     };
     var response = await endJobCard(jsonEncode(body));
+    print('response_check');
+    print(response.statusCode);
+    print(response.body);
     if (response.statusCode == 200) {
       successMsg('job card ended successfully');
       Navigator.pop(context);
       Navigator.pushNamed(context, '/job_card_list');
     } else {
-      print(response.body);
       errorMsg("Unable to end Job Card");
     }
 
@@ -133,6 +148,18 @@ class _EndJobCardState extends State<EndJobCard> {
                   TextAreaField(
                     controller: remarkController,
                     padding: 10,
+                  ),
+                  const SizedBox(height: 15),
+                  const LabelText(text: "Additional Cost"),
+                  const SizedBox(height: 5),
+                  NumberField(
+                    controller: additionalCostController,
+                    padding: 10,
+                    hintText: "0.00",
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(
+                          RegExp(r'^\d*\.?\d{0,2}')),
+                    ],
                   ),
 
                   const SizedBox(height: 20),

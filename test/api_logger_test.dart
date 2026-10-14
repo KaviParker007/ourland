@@ -60,7 +60,7 @@ void main() {
       expect(out, contains('Method: GET')); // upper-cased for scanning
       expect(out, contains('Params: vehicle_id=123'));
       expect(out, contains('Status Code: 200'));
-      expect(out, contains('Duration: 431 ms'));
+      expect(out, contains('Execution Time: 431 ms'));
       expect(out, contains('Response:'));
     });
 

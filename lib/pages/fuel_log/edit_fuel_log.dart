@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ourlandnew/components/buttons.dart';
@@ -7,8 +7,6 @@ import 'package:ourlandnew/components/input_fields.dart';
 import 'package:ourlandnew/components/label.dart';
 import "package:ourlandnew/config.dart";
 import 'package:ourlandnew/pages/login.dart';
-import 'package:ourlandnew/services/api_logger.dart';
-import 'package:ourlandnew/services/fuel_log_api_tag.dart';
 
 class EditFuelLog extends StatefulWidget {
   final Map fuelLog;
@@ -45,35 +43,7 @@ class _EditFuelLogState extends State<EditFuelLog> {
     var uri = Uri.parse("$baseUrl/drf-edit-fuel-log/");
     var auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
     var headers = {'Content-Type': 'application/json', 'authorization': auth};
-    final sw = Stopwatch()..start();
-    try {
-      var response = await http.post(uri, headers: headers, body: body);
-      sw.stop();
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'POST',
-        uri: uri,
-        headers: headers,
-        body: body,
-        statusCode: response.statusCode,
-        responseBody: response.body,
-        elapsedMs: sw.elapsedMilliseconds,
-      );
-      return response;
-    } catch (e) {
-      sw.stop();
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'POST',
-        uri: uri,
-        headers: headers,
-        body: body,
-        error: e,
-        elapsedMs: sw.elapsedMilliseconds,
-      );
-      // Rethrown so the caller's existing error handling still runs unchanged.
-      rethrow;
-    }
+    return http.post(uri, headers: headers, body: body);
   }
 
   void editFuelLog() async {
@@ -169,75 +139,32 @@ class _EditFuelLogState extends State<EditFuelLog> {
     Map body = {'is_active': true};
 
     // VEHICLES
-    final vehicleSw = Stopwatch()..start();
+    // Failures are logged by the HTTP client; the dropdowns stay empty.
     try {
       var vehicleResponse = await http.post(
         vehicleUri,
         headers: headers,
         body: jsonEncode(body),
       );
-      vehicleSw.stop();
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'POST',
-        uri: vehicleUri,
-        headers: headers,
-        body: jsonEncode(body),
-        statusCode: vehicleResponse.statusCode,
-        responseBody: vehicleResponse.body,
-        elapsedMs: vehicleSw.elapsedMilliseconds,
-      );
       if (vehicleResponse.statusCode == 200) {
         setState(() {
           vehicles = jsonDecode(vehicleResponse.body);
         });
       }
-    } catch (e) {
-      vehicleSw.stop();
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'POST',
-        uri: vehicleUri,
-        headers: headers,
-        body: jsonEncode(body),
-        error: e,
-        elapsedMs: vehicleSw.elapsedMilliseconds,
-      );
-    }
+    } catch (_) {}
 
     // FUEL STATION
-    final stationSw = Stopwatch()..start();
     try {
       var fuelStationResponse = await http.get(
         fuelStationUri,
         headers: headers,
-      );
-      stationSw.stop();
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'GET',
-        uri: fuelStationUri,
-        headers: headers,
-        statusCode: fuelStationResponse.statusCode,
-        responseBody: fuelStationResponse.body,
-        elapsedMs: stationSw.elapsedMilliseconds,
       );
       if (fuelStationResponse.statusCode == 200) {
         setState(() {
           fuelStations = jsonDecode(fuelStationResponse.body);
         });
       }
-    } catch (e) {
-      stationSw.stop();
-      logApiCall(
-        tag: kFuelLogApiTag,
-        method: 'GET',
-        uri: fuelStationUri,
-        headers: headers,
-        error: e,
-        elapsedMs: stationSw.elapsedMilliseconds,
-      );
-    }
+    } catch (_) {}
   }
 
   void checkLoginStatus() async {

@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:ourlandnew/services/http_client.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ourlandnew/components/drawer_page.dart';
@@ -304,7 +304,38 @@ class _VehiclesListState extends State<JobCardList> {
                 ),
                 child: RefreshIndicator(
                   onRefresh: getJobCardList,
-                  child: JobCardListBuilder(jobCard: filteredJobCard), // ✅ use filtered list
+                  child: filteredJobCard.isEmpty
+                      ? ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: [
+                            SizedBox(
+                              height: MediaQuery.of(context).size.height * 0.6,
+                              child: Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.assignment_outlined,
+                                      size: 64,
+                                      color: Theme.of(context).hintColor,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      jobCard.isEmpty
+                                          ? "No job cards found"
+                                          : "No job cards match your search",
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: Theme.of(context).hintColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : JobCardListBuilder(jobCard: filteredJobCard), // ✅ use filtered list
                 ),
               ),
               floatingActionButton: FloatingActionButton(
