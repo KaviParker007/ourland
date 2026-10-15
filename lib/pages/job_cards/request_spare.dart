@@ -1,4 +1,5 @@
 import "dart:convert";
+import "package:dropdown_search/dropdown_search.dart";
 import "package:flutter/material.dart";
 import "package:shared_preferences/shared_preferences.dart";
 import "package:ourlandnew/config.dart";
@@ -479,6 +480,63 @@ class _SpareRowCardState extends State<_SpareRowCard> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
       );
 
+  /// Dropdown with a search box in its popup, styled like the other fields.
+  /// [idOf] identifies an option, so a selection survives list reloads.
+  Widget _searchDropdown<T>({
+    Key? key,
+    required List<T> items,
+    required T? selected,
+    required String hint,
+    required String searchHint,
+    required String Function(T) label,
+    required int Function(T) idOf,
+    bool Function(T item, String filter)? filterFn,
+    required bool enabled,
+    required ValueChanged<T> onSelected,
+  }) {
+    return DropdownSearch<T>(
+      key: key,
+      items: (filter, loadProps) => items,
+      selectedItem: selected,
+      enabled: enabled,
+      itemAsString: label,
+      compareFn: (a, b) => idOf(a) == idOf(b),
+      filterFn: filterFn,
+      onSelected: (value) {
+        if (value != null) onSelected(value);
+      },
+      decoratorProps: DropDownDecoratorProps(decoration: _decoration(hint)),
+      popupProps: PopupProps.menu(
+        showSearchBox: true,
+        fit: FlexFit.loose,
+        searchFieldProps: TextFieldProps(
+          decoration: InputDecoration(
+            hintText: searchHint,
+            prefixIcon: const Icon(Icons.search),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        ),
+        emptyBuilder: (context, filter) => Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            filter.isEmpty ? "No options" : 'No matches for "$filter"',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Theme.of(context).colorScheme.outline),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static bool _matches(String filter, List<String?> fields) {
+    final q = filter.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return fields.any((f) => f != null && f.toLowerCase().contains(q));
+  }
+
   Widget _label(String text) => Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Text(text, style: Theme.of(context).textTheme.labelLarge),
@@ -592,20 +650,18 @@ class _SpareRowCardState extends State<_SpareRowCard> {
 
             // Step 1 — item type
             _label("Item Type"),
-            DropdownButtonFormField<int>(
-              initialValue: spare.itemType?.id,
-              isExpanded: true,
-              decoration: _decoration("Select item type"),
-              items: widget.itemTypes
-                  .map((t) => DropdownMenuItem<int>(
-                        value: t.id,
-                        child: Text(t.label, overflow: TextOverflow.ellipsis),
-                      ))
-                  .toList(),
-              onChanged: (id) {
-                if (id == null || id == spare.itemType?.id) return;
-                widget.onItemTypeChanged(
-                    widget.itemTypes.firstWhere((t) => t.id == id));
+            _searchDropdown<InventoryItemType>(
+              items: widget.itemTypes,
+              selected: spare.itemType,
+              hint: "Select item type",
+              searchHint: "Search item type",
+              label: (t) => t.label,
+              idOf: (t) => t.id,
+              filterFn: (t, f) => _matches(f, [t.name, t.code]),
+              enabled: true,
+              onSelected: (type) {
+                if (type.id == spare.itemType?.id) return;
+                widget.onItemTypeChanged(type);
                 _loadSubtypes();
               },
             ),
@@ -613,28 +669,23 @@ class _SpareRowCardState extends State<_SpareRowCard> {
             // Step 2 — subtype
             const SizedBox(height: 12),
             _label("Item Subtype"),
-            DropdownButtonFormField<int>(
+            _searchDropdown<InventoryItemSubtype>(
               // Rebuilt per type so the selection clears when the type changes.
               key: ValueKey('subtype-${spare.itemType?.id}'),
-              initialValue: spare.itemSubtype?.id,
-              isExpanded: true,
-              decoration: _decoration(spare.itemType == null
+              items: _subtypes,
+              selected: spare.itemSubtype,
+              hint: spare.itemType == null
                   ? "Select an item type first"
-                  : "Select item subtype"),
-              items: _subtypes
-                  .map((s) => DropdownMenuItem<int>(
-                        value: s.id,
-                        child: Text(s.name, overflow: TextOverflow.ellipsis),
-                      ))
-                  .toList(),
-              onChanged: spare.itemType == null || _loadingSubtypes
-                  ? null
-                  : (id) {
-                      if (id == null || id == spare.itemSubtype?.id) return;
-                      widget.onSubtypeChanged(
-                          _subtypes.firstWhere((s) => s.id == id));
-                      _loadItems();
-                    },
+                  : "Select item subtype",
+              searchHint: "Search item subtype",
+              label: (s) => s.name,
+              idOf: (s) => s.id,
+              enabled: spare.itemType != null && !_loadingSubtypes,
+              onSelected: (subtype) {
+                if (subtype.id == spare.itemSubtype?.id) return;
+                widget.onSubtypeChanged(subtype);
+                _loadItems();
+              },
             ),
             if (spare.itemType != null)
               _status(
@@ -648,28 +699,21 @@ class _SpareRowCardState extends State<_SpareRowCard> {
             // Step 3 — item
             const SizedBox(height: 12),
             _label("Item"),
-            DropdownButtonFormField<int>(
+            _searchDropdown<InventoryItem>(
               key: ValueKey(
                   'item-${spare.itemType?.id}-${spare.itemSubtype?.id}'),
-              initialValue: spare.item?.id,
-              isExpanded: true,
-              decoration: _decoration(spare.itemSubtype == null
+              items: items,
+              selected: spare.item,
+              hint: spare.itemSubtype == null
                   ? "Select a subtype first"
-                  : "Select item"),
-              items: items
-                  .map((item) => DropdownMenuItem<int>(
-                        value: item.id,
-                        child:
-                            Text(item.name, overflow: TextOverflow.ellipsis),
-                      ))
-                  .toList(),
-              onChanged: spare.itemSubtype == null || _loadingItems
-                  ? null
-                  : (id) {
-                      if (id == null) return;
-                      widget.onItemChanged(
-                          _items.firstWhere((i) => i.id == id));
-                    },
+                  : "Select item",
+              searchHint: "Search by name, code or brand",
+              label: (i) => i.name,
+              idOf: (i) => i.id,
+              filterFn: (i, f) => _matches(
+                  f, [i.name, i.itemCode, i.brandName, i.modelNumber]),
+              enabled: spare.itemSubtype != null && !_loadingItems,
+              onSelected: widget.onItemChanged,
             ),
             if (spare.itemSubtype != null)
               _status(
