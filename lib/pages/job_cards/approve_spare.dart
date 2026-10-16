@@ -73,7 +73,7 @@ class _ApproveSpareState extends State<ApproveSpare> {
     setState(() => isLoading = true);
     try {
       final uri = Uri.parse(
-          '$baseUrl/drf_approve_spare_v2/?id=${widget.jobCardId}');
+          '$baseUrl/drf_approve_spare_v3/?id=${widget.jobCardId}');
       print('[GET] $uri');
       final response = await http.get(
         uri,
@@ -172,7 +172,7 @@ class _ApproveSpareState extends State<ApproveSpare> {
 
     setState(() => isSubmitting = true);
     try {
-      final uri = Uri.parse('$baseUrl/drf_approve_spare_v2/');
+      final uri = Uri.parse('$baseUrl/drf_approve_spare_v3/');
       final body = jsonEncode({
         'id': widget.jobCardId,
         'approval_remark': globalRemarkController.text.trim(),
