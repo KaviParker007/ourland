@@ -2,7 +2,7 @@
 //
 // Shown when `drf_get_last_fueling_detail/` returned `alert: true`, gating the
 // save so the user cannot submit past a warning by accident. It is advisory, not
-// a validation failure: "Continue Anyway" proceeds with the normal flow.
+// a validation failure: "Proceed" proceeds with the normal flow.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -202,7 +202,7 @@ class _FuelAlertDialogState extends State<_FuelAlertDialog> {
                 borderRadius: BorderRadius.circular(10)),
           ),
           icon: const Icon(Icons.arrow_forward_rounded, size: 16),
-          label: const Text('Continue Anyway'),
+          label: const Text('Proceed'),
         ),
       ],
     );

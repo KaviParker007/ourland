@@ -74,18 +74,18 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Cancel'), findsOneWidget);
-      expect(find.text('Continue Anyway'), findsOneWidget);
+      expect(find.text('Proceed'), findsOneWidget);
       expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
     });
 
-    testWidgets('Continue Anyway resolves true so the save proceeds',
+    testWidgets('Proceed resolves true so the save proceeds',
         (tester) async {
       bool? result;
       await tester.pumpWidget(host(detail(), (r) => result = r));
       await tester.tap(find.text('save'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Continue Anyway'));
+      await tester.tap(find.text('Proceed'));
       await tester.pumpAndSettle();
 
       expect(result, isTrue);
@@ -149,7 +149,7 @@ void main() {
       expect(find.text('Fuel Log Warning'), findsOneWidget);
       expect(find.textContaining('did not provide any details'),
           findsOneWidget);
-      expect(find.text('Continue Anyway'), findsOneWidget);
+      expect(find.text('Proceed'), findsOneWidget);
     });
 
     testWidgets('lays out without overflow across sizes and text scales',
@@ -225,7 +225,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Fuel Log Warning'), findsOneWidget);
-      await tester.tap(find.text('Continue Anyway'));
+      await tester.tap(find.text('Proceed'));
       await tester.pumpAndSettle();
       expect(result, isTrue);
       expect(tester.takeException(), isNull);

@@ -378,11 +378,12 @@ class _FuelLogListState extends State<FuelLogList> {
           ),
         ),
         floatingActionButton: isSearching ? null : FloatingActionButton(
-          onPressed: () {
-            Navigator.push(
+          onPressed: () async {
+            final saved = await Navigator.push<bool>(
               context,
-              MaterialPageRoute(builder: (context) => AddFuelLog()),
+              MaterialPageRoute(builder: (context) => const AddFuelLog()),
             );
+            if (saved == true && mounted) getFuelLogs();
           },
           child: const Icon(Icons.add),
         ),

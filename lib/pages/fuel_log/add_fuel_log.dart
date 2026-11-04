@@ -1,20 +1,27 @@
-import "dart:convert";
 import "dart:io";
 import "package:flutter/material.dart";
+import "package:flutter/services.dart";
 import "package:shared_preferences/shared_preferences.dart";
 import "package:ourlandnew/components/buttons.dart";
 import "package:ourlandnew/components/input_fields.dart";
 import "package:ourlandnew/components/label.dart";
-import "package:ourlandnew/config.dart";
-import 'package:ourlandnew/services/http_client.dart' as http;
 import "package:ourlandnew/pages/login.dart";
 
 import "fuel_alert_dialog.dart";
+import "fuel_log_service.dart";
 import "last_fueling_detail.dart";
 import 'package:dropdown_search/dropdown_search.dart';
 
 import "../../components/image_picker.dart";
 
+/// Add Fuel Log (FuelMaster).
+///
+/// Flow: load the vehicle and fuel station lists → user picks a vehicle → load
+/// its last fueling detail (prefills the tag number, shows mileage and any
+/// warning) → user completes the form → if the detail carried an alert, the
+/// warning dialog gates the save → multipart POST.
+///
+/// Pops with `true` after a successful save so the list can refresh.
 class AddFuelLog extends StatefulWidget {
   const AddFuelLog({super.key});
 
@@ -27,20 +34,23 @@ class _AddFuelLogState extends State<AddFuelLog> {
   bool isLoading = false;
   bool isStarting = false;
   bool isLoadingLastFuel = false;
-  String baseUrl = AppConfig.apiUrl;
   String? username;
   String? password;
-  List vehicles = [];
-  List fuelStations = [];
-  Map vehicleAndFuelStations = {};
+
+  FuelLogService? service;
+  List<FuelVehicle> vehicles = [];
+  List<FuelStation> fuelStations = [];
+  String? optionsError;
 
   // Controllers
   TextEditingController odoReadingController = TextEditingController();
   TextEditingController fuelQuantityController = TextEditingController();
   TextEditingController fuelUnitCostController = TextEditingController();
+  TextEditingController tagNumberController = TextEditingController();
   TextEditingController remarkController = TextEditingController();
   TextEditingController beforeImageController = TextEditingController();
   TextEditingController indentImageController = TextEditingController();
+  TextEditingController afterImageController = TextEditingController();
 
   // Read-only controllers for last fuel details
   TextEditingController lastOdoReadingController = TextEditingController();
@@ -50,12 +60,27 @@ class _AddFuelLogState extends State<AddFuelLog> {
   TextEditingController lastMileageController = TextEditingController();
   TextEditingController mileageStatusController = TextEditingController();
   TextEditingController fuelFreqController = TextEditingController();
+  TextEditingController lastTagNumberController = TextEditingController();
 
   int? vehicle;
   int? fuelStation;
   String? fuelType = "P";
 
   LastFuelingDetail lastFuelDetails = LastFuelingDetail.empty;
+
+  /// Set when the detail call for the selected vehicle failed. Submission is
+  /// held until it loads, since it decides whether the warning must be shown.
+  String? lastFuelError;
+
+  /// Whether [lastFuelDetails] belongs to the selected vehicle.
+  bool lastFuelLoaded = false;
+
+  FuelVehicle? get selectedVehicle {
+    for (final v in vehicles) {
+      if (v.id == vehicle) return v;
+    }
+    return null;
+  }
 
   /// Maps a grid key to its read-only controller. Keeps the layout list above
   /// declarative without repeating 40 lines of decoration per field.
@@ -73,6 +98,8 @@ class _AddFuelLogState extends State<AddFuelLog> {
         return lastMileageController;
       case 'mileageStatus':
         return mileageStatusController;
+      case 'tag':
+        return lastTagNumberController;
       default:
         return fuelFreqController;
     }
@@ -133,9 +160,9 @@ class _AddFuelLogState extends State<AddFuelLog> {
     );
   }
 
-  /// Pushes [lastFuelDetails] into the read-only fields. Called from inside
-  /// setState on every outcome — success, non-200 and exception — so the panel
-  /// can never keep showing a previous vehicle's figures.
+  /// Pushes [lastFuelDetails] into the read-only fields and prefills the tag
+  /// number. Called from inside setState on every outcome — success and
+  /// failure — so the panel can never keep showing a previous vehicle's figures.
   void _applyLastFuelDetails() {
     lastOdoReadingController.text = lastFuelDetails.odoReadingDisplay;
     lastFuelDateController.text = lastFuelDetails.fuelDateDisplay;
@@ -144,6 +171,9 @@ class _AddFuelLogState extends State<AddFuelLog> {
     lastMileageController.text = lastFuelDetails.mileageDisplay;
     mileageStatusController.text = lastFuelDetails.mileageStatusDisplay;
     fuelFreqController.text = lastFuelDetails.fuelFreqDisplay;
+    lastTagNumberController.text = lastFuelDetails.tagNumberDisplay;
+    // Prefilled for review; it is only posted if the user changes it.
+    tagNumberController.text = lastFuelDetails.tagNumber?.toString() ?? '';
   }
 
   @override
@@ -152,209 +182,164 @@ class _AddFuelLogState extends State<AddFuelLog> {
     checkLoginStatus();
   }
 
+  @override
+  void dispose() {
+    for (final c in [
+      odoReadingController,
+      fuelQuantityController,
+      fuelUnitCostController,
+      tagNumberController,
+      remarkController,
+      beforeImageController,
+      indentImageController,
+      afterImageController,
+      lastOdoReadingController,
+      lastFuelDateController,
+      lastFuelTimeController,
+      lastFuelQuantityController,
+      lastMileageController,
+      mileageStatusController,
+      fuelFreqController,
+      lastTagNumberController,
+    ]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   Future<void> getLastFuelingDetails(int vehicleId) async {
     setState(() {
       isLoadingLastFuel = true;
+      lastFuelError = null;
+      lastFuelLoaded = false;
+      lastFuelDetails = LastFuelingDetail.empty;
+      _applyLastFuelDetails();
     });
 
     try {
-      var uri = Uri.parse(
-          "$baseUrl/drf_get_last_fueling_detail/?vehicle_id=$vehicleId");
-      var auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
-      var headers = {
-        'Content-Type': 'application/json',
-        'authorization': auth
-      };
-
-      var response = await http.get(uri, headers: headers);
-
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        setState(() {
-          // A payload that is not a JSON object still yields the empty detail
-          // rather than throwing.
-          lastFuelDetails = decoded is Map<String, dynamic>
-              ? LastFuelingDetail.fromJson(decoded)
-              : LastFuelingDetail.empty;
-          _applyLastFuelDetails();
-        });
-      } else {
-        setState(() {
-          lastFuelDetails = LastFuelingDetail.empty;
-          _applyLastFuelDetails();
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: Colors.orange,
-            content: Text('Could not fetch last fueling details'),
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (e) {
+      final detail = await service!.fetchLastFuelingDetail(vehicleId);
+      // Ignore a late answer for a vehicle the user has since changed.
+      if (!mounted || vehicle != vehicleId) return;
       setState(() {
-        lastFuelDetails = LastFuelingDetail.empty;
+        lastFuelDetails = detail;
+        lastFuelLoaded = true;
         _applyLastFuelDetails();
       });
+    } on FuelLogApiException catch (e) {
+      if (!mounted || vehicle != vehicleId) return;
+      setState(() => lastFuelError = e.message);
     } finally {
-      setState(() {
-        isLoadingLastFuel = false;
-      });
-    }
-  }
-
-  Future<http.Response> createFuelLogMultipart(
-      Map<String, dynamic> data,
-      Map<String, dynamic> images,
-      ) async {
-    try {
-      var uri = Uri.parse("$baseUrl/drf-add-fuel-log/");
-      var auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
-
-      var request = http.MultipartRequest('POST', uri)
-        ..headers['authorization'] = auth;
-
-      data.forEach((key, value) {
-        request.fields[key] = value.toString();
-      });
-
-      for (var entry in images.entries) {
-        if (entry.value != null && entry.value.toString().isNotEmpty) {
-          request.files.add(
-            await http.MultipartFile.fromPath(entry.key, entry.value),
-          );
-        }
+      if (mounted && vehicle == vehicleId) {
+        setState(() => isLoadingLastFuel = false);
       }
-
-      var streamedResponse = await request.send();
-      return await http.Response.fromStream(streamedResponse);
-    } catch (e) {
-      errorMsg(e.toString());
-      return http.Response("Error", 500);
     }
   }
 
   void addFuelLog() async {
+    // A second tap while a save is in flight must not post twice.
+    if (isLoading) return;
+
+    final validationError = validateFuelLogInput(
+      vehicle: vehicle,
+      fuelStation: fuelStation,
+      fuelType: fuelType,
+      odoReading: odoReadingController.text,
+      fuelQuantity: fuelQuantityController.text,
+      fuelUnitCost: fuelUnitCostController.text,
+      tagNumber: tagNumberController.text,
+      beforeImagePath: beforeImageController.text,
+      lastDetail: lastFuelLoaded ? lastFuelDetails : null,
+    );
+    if (validationError != null) {
+      errorMsg(validationError);
+      return;
+    }
+    if (isLoadingLastFuel) {
+      errorMsg("Please wait while the last fueling details load.");
+      return;
+    }
+    if (!lastFuelLoaded) {
+      errorMsg("Last fueling details could not be loaded. Tap Retry first.");
+      return;
+    }
+
     setState(() {
       isLoading = true;
     });
 
-    String odoReading = odoReadingController.text;
-    String fuelQuantity = fuelQuantityController.text;
-    String fuelUnitCost = fuelUnitCostController.text;
-    String remark = remarkController.text;
-
-    if (vehicle == null ||
-        fuelStation == null ||
-        odoReading.isEmpty ||
-        fuelQuantity.isEmpty ||
-        fuelUnitCost.isEmpty ||
-        beforeImageController.text.isEmpty) {
-      errorMsg("Required * fields cannot be empty");
-      setState(() {
-        isLoading = false;
-      });
-    } else {
-      // The backend flagged a warning for this vehicle. Gate the save on an
-      // explicit acknowledgement — advisory, not a validation failure, so the
-      // user can always continue.
-      if (lastFuelDetails.shouldWarn) {
-        final proceed = await showFuelAlertDialog(context, lastFuelDetails);
-        if (!mounted) return;
-        if (!proceed) {
-          // Cancelled or dismissed — return to the form with nothing submitted.
-          setState(() {
-            isLoading = false;
-          });
-          return;
-        }
-      }
-
-      final Map<String, dynamic> data = {
-        "vehicle": vehicle,
-        "fuel_station": fuelStation,
-        "fuel_type": fuelType,
-        "odo_reading": odoReading,
-        "fuel_quantity": fuelQuantity,
-        "fuel_unit_cost": fuelUnitCost,
-        "remark": remark,
-        // Posted exactly as the detail endpoint returned it — never generated
-        // or reworded here. Omitted entirely when there was no warning.
-        if (lastFuelDetails.alertMessageForSubmission != null)
-          "alert_message": lastFuelDetails.alertMessageForSubmission,
-      };
-
-      final Map<String, dynamic> images = {
-        "before_image": beforeImageController.text,
-        "indent_image": indentImageController.text,
-      };
-
-      try {
-        var response = await createFuelLogMultipart(data, images);
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          successMsg('Fuel Log created successfully');
-          Navigator.pop(context);
-          Navigator.pushNamed(context, '/fuel_log_list');
-        } else {
-          String errorMessage = 'Failed to create fuel log';
-          try {
-            final errorResponse = jsonDecode(response.body);
-            if (errorResponse is Map) {
-              if (errorResponse.containsKey('error')) {
-                errorMessage = errorResponse['error'].toString();
-              } else if (errorResponse.containsKey('message')) {
-                errorMessage = errorResponse['message'].toString();
-              } else if (errorResponse.containsKey('detail')) {
-                errorMessage = errorResponse['detail'].toString();
-              }
-            } else if (errorResponse is String) {
-              errorMessage = errorResponse;
-            }
-          } catch (e) {
-            errorMessage =
-            'Error ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}';
-          }
-
-          errorMsg(errorMessage);
-        }
-      } catch (e) {
-        errorMsg('Network error: ${e.toString()}');
-        print('Exception in addFuelLog: $e');
-      } finally {
+    // The backend flagged a warning for this vehicle. Gate the save on an
+    // explicit acknowledgement — advisory, not a validation failure, so the
+    // user can always continue.
+    String? alertMessage;
+    if (lastFuelDetails.shouldWarn) {
+      final proceed = await showFuelAlertDialog(context, lastFuelDetails);
+      if (!mounted) return;
+      if (!proceed) {
+        // Cancelled or dismissed — return to the form with nothing submitted.
         setState(() {
           isLoading = false;
         });
+        return;
       }
+      // Posted exactly as the detail endpoint returned it — never generated or
+      // reworded here. Left null, and so omitted, when no warning was shown.
+      alertMessage = lastFuelDetails.alertMessageForSubmission;
+    }
+
+    final submission = FuelLogSubmission(
+      vehicle: vehicle!,
+      fuelStation: fuelStation!,
+      fuelType: fuelType!,
+      odoReading: odoReadingController.text,
+      fuelQuantity: fuelQuantityController.text,
+      fuelUnitCost: fuelUnitCostController.text,
+      tagNumber: tagNumberToSubmit(
+          tagNumberController.text, lastFuelDetails.tagNumber),
+      remark: remarkController.text,
+      alertMessage: alertMessage,
+      beforeImagePath: beforeImageController.text,
+      indentImagePath: indentImageController.text,
+      afterImagePath: afterImageController.text,
+    );
+
+    try {
+      final message = await service!.submitFuelLog(submission);
+      if (!mounted) return;
+      successMsg(message ?? 'Fuel Log created successfully');
+      Navigator.pop(context, true);
+    } on FuelLogApiException catch (e) {
+      if (!mounted) return;
+      errorMsg(e.message);
+      setState(() {
+        isLoading = false;
+      });
     }
   }
 
   Future<void> getDropDownValues() async {
     setState(() {
-      vehicles = [];
-      odoReadingController.text = "0.0";
-      fuelQuantityController.text = "1";
-      fuelUnitCostController.text = "92.5";
+      optionsError = null;
     });
 
-    var vehicleFuelUri = Uri.parse("$baseUrl/drf-add-fuel-log/");
-    var auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
-    var headers = {'Content-Type': 'application/json', 'authorization': auth};
-
     try {
-      var fuelStationResponse = await http.get(vehicleFuelUri, headers: headers);
-
-      if (fuelStationResponse.statusCode == 200) {
-        setState(() {
-          vehicleAndFuelStations = jsonDecode(fuelStationResponse.body);
-          vehicles = vehicleAndFuelStations['vehicle_list'];
-          fuelStations = vehicleAndFuelStations['fuelstation_list'];
-        });
-      }
-    } catch (_) {
-      // Already logged by the HTTP client; the dropdowns stay empty.
+      final options = await service!.fetchFormOptions();
+      if (!mounted) return;
+      setState(() {
+        vehicles = options.vehicles;
+        fuelStations = options.fuelStations;
+        // Drop a selection the refreshed lists no longer offer.
+        if (!fuelStations.any((s) => s.id == fuelStation)) fuelStation = null;
+      });
+    } on FuelLogApiException catch (e) {
+      if (!mounted) return;
+      setState(() => optionsError = e.message);
     }
+  }
+
+  Future<void> _retryOptions() async {
+    setState(() => isStarting = true);
+    await getDropDownValues();
+    if (mounted) setState(() => isStarting = false);
   }
 
   void checkLoginStatus() async {
@@ -372,10 +357,12 @@ class _AddFuelLogState extends State<AddFuelLog> {
         isLoggedIn = true;
         username = user;
         password = pass;
+        service = FuelLogService(username: user, password: pass);
       });
+      await getDropDownValues();
     }
 
-    await getDropDownValues();
+    if (!mounted) return;
     setState(() {
       isStarting = false;
     });
@@ -401,8 +388,115 @@ class _AddFuelLogState extends State<AddFuelLog> {
     );
   }
 
+  /// Shown in place of the form when the vehicle / fuel station lists failed.
+  Widget _optionsErrorCard() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 30),
+      child: Column(
+        children: [
+          Icon(Icons.error_outline,
+              size: 40, color: Theme.of(context).colorScheme.error),
+          const SizedBox(height: 10),
+          Text(
+            "Could not load vehicles and fuel stations.\n$optionsError",
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _retryOptions,
+            icon: const Icon(Icons.refresh),
+            label: const Text("Retry"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Body of the Last Fueling Details panel: the grid, a first-fueling note, or
+  /// an error with Retry.
+  Widget _lastFuelBody() {
+    if (lastFuelError != null) {
+      return Row(
+        children: [
+          Expanded(
+            child: Text(lastFuelError!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+          TextButton(
+            onPressed: () => getLastFuelingDetails(vehicle!),
+            child: const Text("Retry"),
+          ),
+        ],
+      );
+    }
+    if (lastFuelLoaded && lastFuelDetails.isFirstFueling) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'No previous fueling found — this is the first fueling for this vehicle.',
+            style: TextStyle(color: Colors.blue.shade900),
+          ),
+          FuelAlertBanner(detail: lastFuelDetails),
+        ],
+      );
+    }
+    return Column(
+      children: [
+        // Every field the detail endpoint returns, laid out two per row on a
+        // phone and wider viewports alike, dropping to one per row when there
+        // is not enough width — so a long value or a large text scale cannot
+        // overflow.
+        _lastFuelGrid(const [
+          ['Last ODO Reading', 'odo'],
+          ['Last Fuel Date', 'date'],
+          ['Last Fuel Time', 'time'],
+          ['Last Fuel Qty', 'qty'],
+          ['Mileage', 'mileage'],
+          ['Mileage Status', 'mileageStatus'],
+          ['Fuel Frequency', 'fuelFreq'],
+          ['Last Tag Number', 'tag'],
+        ]),
+        FuelAlertBanner(detail: lastFuelDetails),
+      ],
+    );
+  }
+
+  /// Picker + preview for one image field.
+  List<Widget> _imageSection({
+    required String label,
+    required TextEditingController controller,
+    required String buttonText,
+  }) {
+    return [
+      LabelText(text: label),
+      const SizedBox(height: 5),
+      _buildImagePreview(controller.text, label.replaceAll('*', '')),
+      const SizedBox(height: 10),
+      Row(
+        children: [
+          const Spacer(),
+          CameraImagePicker(
+            text: buttonText,
+            onImagePicked: (file) {
+              setState(() {
+                controller.text = file.path;
+              });
+            },
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
+    final lastOdoHint = lastFuelLoaded && !lastFuelDetails.isFirstFueling
+        ? 'Last reading: ${lastFuelDetails.odoReadingDisplay}'
+        : null;
+    final previousTag = lastFuelDetails.tagNumber;
+
     return !isLoggedIn
         ? const LoginPage()
         : isStarting
@@ -424,14 +518,14 @@ class _AddFuelLogState extends State<AddFuelLog> {
                 vertical: 20,
                 horizontal: 10,
               ),
-              children: [
+              children: optionsError != null
+                  ? [_optionsErrorCard()]
+                  : [
                 // VEHICLE
                 const LabelText(text: "Vehicle*"),
                 const SizedBox(height: 5),
 
-                // ── v7 DropdownSearch ──────────────────────────────
-                DropdownSearch<String>(
-                  // v7: decoratorProps replaces dropdownDecoratorProps
+                DropdownSearch<FuelVehicle>(
                   decoratorProps: DropDownDecoratorProps(
                     decoration: InputDecoration(
                       contentPadding:
@@ -453,60 +547,37 @@ class _AddFuelLogState extends State<AddFuelLog> {
                         ),
                       ),
                     ),
-                    // v7: itemBuilder has 4 params (added isHighlighted)
                     itemBuilder:
                         (context, item, isSelected, isHighlighted) {
-                      return ListTile(
-                        title: Text(
-                          vehicles
-                              .firstWhere(
-                                (dynamic element) =>
-                            element['id'].toString() == item,
-                            orElse: () =>
-                            {'vehicle_number': 'Unknown'},
-                          )['vehicle_number']
-                              .toString(),
-                        ),
-                      );
+                      return ListTile(title: Text(item.vehicleNumber));
                     },
+                    emptyBuilder: (context, filter) => Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        filter.isEmpty
+                            ? 'No vehicles available for your account.'
+                            : 'No vehicles match "$filter"',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
                   ),
-                  // v7: items is now a function, not a plain List
-                  items: (filter, loadProps) => vehicles
-                      .map<String>(
-                          (dynamic value) => value['id'].toString())
-                      .toList(),
-                  itemAsString: (String item) {
-                    return vehicles
-                        .firstWhere(
-                          (dynamic element) =>
-                      element['id'].toString() == item,
-                      orElse: () => {'vehicle_number': ''},
-                    )['vehicle_number']
-                        .toString();
-                  },
-                  // v7: onChanged renamed to onSelected
-                  onSelected: (String? value) {
-                    if (value == null) return;
+                  items: (filter, loadProps) => vehicles,
+                  itemAsString: (FuelVehicle v) => v.vehicleNumber,
+                  compareFn: (a, b) => a.id == b.id,
+                  onSelected: (FuelVehicle? value) {
+                    // Re-picking the same vehicle does not refetch.
+                    if (value == null || value.id == vehicle) return;
                     setState(() {
-                      vehicle = int.parse(value);
+                      vehicle = value.id;
                     });
-                    getLastFuelingDetails(vehicle!);
+                    getLastFuelingDetails(value.id);
                   },
-                  selectedItem: vehicle?.toString(),
+                  selectedItem: selectedVehicle,
                   dropdownBuilder: (context, selectedItem) {
                     return Text(
-                      vehicles
-                          .firstWhere(
-                            (dynamic item) =>
-                        item['id'].toString() == selectedItem,
-                        orElse: () =>
-                        {'vehicle_number': 'Select a vehicle'},
-                      )['vehicle_number']
-                          .toString(),
-                    );
+                        selectedItem?.vehicleNumber ?? 'Select a vehicle');
                   },
                 ),
-                // ──────────────────────────────────────────────────
 
                 const SizedBox(height: 10),
 
@@ -549,20 +620,7 @@ class _AddFuelLogState extends State<AddFuelLog> {
                           ],
                         ),
                         const SizedBox(height: 10),
-                        // Every field the detail endpoint returns, laid out two
-                        // per row on a phone and wider viewports alike, dropping
-                        // to one per row when there is not enough width — so a
-                        // long value or a large text scale cannot overflow.
-                        _lastFuelGrid(const [
-                          ['Last ODO Reading', 'odo'],
-                          ['Last Fuel Date', 'date'],
-                          ['Last Fuel Time', 'time'],
-                          ['Last Fuel Qty', 'qty'],
-                          ['Mileage', 'mileage'],
-                          ['Mileage Status', 'mileageStatus'],
-                          ['Fuel Frequency', 'fuelFreq'],
-                        ]),
-                        FuelAlertBanner(detail: lastFuelDetails),
+                        _lastFuelBody(),
                       ],
                     ),
                   ),
@@ -572,12 +630,17 @@ class _AddFuelLogState extends State<AddFuelLog> {
                 // FUEL STATION
                 const LabelText(text: "Fuel Station*"),
                 const SizedBox(height: 5),
-                DropdownButtonFormField<String>(
+                DropdownButtonFormField<int>(
+                  initialValue: fuelStation,
+                  isExpanded: true,
+                  hint: Text(fuelStations.isEmpty
+                      ? 'No fuel stations available'
+                      : 'Select a fuel station'),
                   items: fuelStations
-                      .map<DropdownMenuItem<String>>((dynamic value) {
-                    return DropdownMenuItem<String>(
-                      value: value['id'].toString(),
-                      child: Text(value['name'].toString()),
+                      .map<DropdownMenuItem<int>>((FuelStation s) {
+                    return DropdownMenuItem<int>(
+                      value: s.id,
+                      child: Text(s.name, overflow: TextOverflow.ellipsis),
                     );
                   }).toList(),
                   decoration: InputDecoration(
@@ -587,9 +650,9 @@ class _AddFuelLogState extends State<AddFuelLog> {
                       borderRadius: BorderRadius.circular(14),
                     ),
                   ),
-                  onChanged: (String? value) {
+                  onChanged: (int? value) {
                     setState(() {
-                      fuelStation = int.parse(value.toString());
+                      fuelStation = value;
                     });
                   },
                 ),
@@ -599,7 +662,7 @@ class _AddFuelLogState extends State<AddFuelLog> {
                 const LabelText(text: "Fuel Type*"),
                 const SizedBox(height: 5),
                 DropdownButtonFormField<String>(
-                  value: fuelType,
+                  initialValue: fuelType,
                   items: [
                     ['P', 'Petrol'],
                     ['D', 'Diesel'],
@@ -632,6 +695,7 @@ class _AddFuelLogState extends State<AddFuelLog> {
                 NumberField(
                   controller: odoReadingController,
                   padding: 10,
+                  hintText: lastOdoHint,
                 ),
                 const SizedBox(height: 10),
 
@@ -641,57 +705,56 @@ class _AddFuelLogState extends State<AddFuelLog> {
                 NumberField(
                   controller: fuelQuantityController,
                   padding: 10,
+                  hintText: '1 – 250',
                 ),
                 const SizedBox(height: 10),
 
-                // FUEL UNIT COST
-                const LabelText(text: "Fuel Unit Cost*"),
+                // FUEL UNIT COST — no default price: the backend applies the
+                // station's configured price when it has one.
+                const LabelText(text: "Fuel Unit Cost"),
                 const SizedBox(height: 5),
                 NumberField(
                   controller: fuelUnitCostController,
                   padding: 10,
+                  hintText: '70 – 120 (station price applies if set)',
                 ),
                 const SizedBox(height: 10),
 
-                // BEFORE IMAGE
-                const LabelText(text: "Before Image*"),
+                // TANK TAG NUMBER
+                const LabelText(text: "Tag Number"),
                 const SizedBox(height: 5),
-                _buildImagePreview(
-                    beforeImageController.text, 'Before Image'),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    const Spacer(),
-                    CameraImagePicker(
-                      text: 'Upload Before Image',
-                      onImagePicked: (file) {
-                        setState(() {
-                          beforeImageController.text = file.path;
-                        });
-                      },
-                    ),
-                  ],
+                NumberField(
+                  controller: tagNumberController,
+                  padding: 10,
+                  hintText: 'Enter tank tag number',
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 ),
+                if (lastFuelLoaded)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4, left: 4),
+                    child: Text(
+                      previousTag == null
+                          ? 'No tag recorded at the last fueling. Enter one if the tank is tagged.'
+                          : 'Previous tag: $previousTag. Change it only if the tank tag is different.',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ),
                 const SizedBox(height: 10),
 
-                // INDENT IMAGE
-                const LabelText(text: "Indent Image"),
-                const SizedBox(height: 5),
-                _buildImagePreview(
-                    indentImageController.text, 'Indent Image'),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    const Spacer(),
-                    CameraImagePicker(
-                      text: 'Upload Indent Image',
-                      onImagePicked: (file) {
-                        setState(() {
-                          indentImageController.text = file.path;
-                        });
-                      },
-                    ),
-                  ],
+                ..._imageSection(
+                  label: "Before Image*",
+                  controller: beforeImageController,
+                  buttonText: 'Upload Before Image',
+                ),
+                ..._imageSection(
+                  label: "Indent Image",
+                  controller: indentImageController,
+                  buttonText: 'Upload Indent Image',
+                ),
+                ..._imageSection(
+                  label: "After Image",
+                  controller: afterImageController,
+                  buttonText: 'Upload After Image',
                 ),
 
                 // REMARK

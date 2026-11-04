@@ -10,6 +10,7 @@
 //     "mileage": 0.0,
 //     "mileage_status": 0.0,
 //     "fuel_freq": 0,
+//     "tag_number": 1042,
 //     "alert": true,
 //     "alert_message": ["achieved mileage 0.0 is very less than target mileage 4.0"]
 //   }
@@ -32,6 +33,10 @@ class LastFuelingDetail {
   final double? mileageStatus;
   final int? fuelFreq;
 
+  /// Tank tag recorded at the last fueling, or null when none was set. Shown
+  /// for review only — it is not re-posted unless the user changes it.
+  final int? tagNumber;
+
   /// Whether the backend wants the user warned before saving.
   final bool alert;
 
@@ -47,6 +52,7 @@ class LastFuelingDetail {
     this.mileage,
     this.mileageStatus,
     this.fuelFreq,
+    this.tagNumber,
     this.alert = false,
     this.alertMessages = const [],
   });
@@ -104,10 +110,21 @@ class LastFuelingDetail {
       mileage: _double(json['mileage']),
       mileageStatus: _double(json['mileage_status']),
       fuelFreq: _int(json['fuel_freq']),
+      tagNumber: _int(json['tag_number']),
       alert: _bool(json['alert']),
       alertMessages: _messages(json['alert_message']),
     );
   }
+
+  // ── First fueling ────────────────────────────────────────────────────────────
+
+  /// True for a vehicle with no fueling history. The backend answers with a
+  /// zeroed record (no date, zero odometer and quantity) rather than an error,
+  /// and that is a valid first-time fueling — not a failed lookup.
+  bool get isFirstFueling =>
+      lastFuelDate == null &&
+      (lastOdoReading ?? 0) == 0 &&
+      (lastFuelQuantity ?? 0) == 0;
 
   // ── Alert ────────────────────────────────────────────────────────────────────
 
@@ -160,4 +177,6 @@ class LastFuelingDetail {
   String get mileageStatusDisplay => mileageStatus?.toString() ?? _na;
 
   String get fuelFreqDisplay => fuelFreq?.toString() ?? _na;
+
+  String get tagNumberDisplay => tagNumber?.toString() ?? 'Not set';
 }
