@@ -1,27 +1,29 @@
-import 'dart:convert';
-import 'package:ourlandnew/services/http_client.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ourlandnew/components/drawer_page.dart';
-import 'package:ourlandnew/config.dart';
 import 'package:ourlandnew/pages/notifications/notification_bell.dart';
+import 'package:ourlandnew/services/dash_api.dart';
 import 'queried_shifts_page.dart';
 import 'add_shift.dart';
+import 'shift_dash_models.dart';
+import 'shift_dash_service.dart';
 
-const _kVehicleTypes = ['Tipper', 'Tractor', 'LCV', 'EMV', 'Compactor'];
+// ── Views ─────────────────────────────────────────────────────────────────────
+//
+// The dashboard has two views in a horizontal pager. Swipe left/right or tap the
+// tab to switch; the status and date filters, the expanded project/zone and every
+// loaded list live on this page's state, so nothing is lost or refetched by
+// switching views.
+//
+//   By Location   project → zone → ward       (tap a count for the records)
+//   By Creator    employee who started the shifts, scoped to the expanded zone
 
-const _kVehicleColors = <String, Color>{
-  'Tipper':    Color(0xFFFF7043),
-  'Tractor':   Color(0xFF42A5F5),
-  'LCV':       Color(0xFF66BB6A),
-  'EMV':       Color(0xFFAB47BC),
-  'Compactor': Color(0xFF26C6DA),
-};
+enum _DashView { location, creator }
 
-// Shift-status filters. The selected value is sent as the `shift_status` query
-// param and used to read the matching list back from the response (data[value]).
-const _kShiftFilters = ['Open', 'Closed', 'Long', 'Unclosed'];
+extension on _DashView {
+  String get label => this == _DashView.location ? 'By Location' : 'By Creator';
+}
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
@@ -33,29 +35,43 @@ class ShiftDashboardPage extends StatefulWidget {
 }
 
 class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
-  String? username;
-  String? password;
-  final String _baseUrl = AppConfig.apiUrl;
+  final _api = ShiftDashboardApi.instance;
+  final _pageController = PageController();
 
-  DateTime _selectedDate = DateTime.now();
-  String _shiftStatus = 'Open';
+  _DashView _view = _DashView.location;
+  ShiftDashQuery _query = ShiftDashQuery(
+    status: ShiftStatus.open,
+    date: DateTime.now(),
+  );
 
   // Level 1 — projects
-  List<Map<String, dynamic>> _projectList = [];
+  List<ShiftDashRow> _projectList = [];
   bool _projectLoading = false;
   String? _projectError;
 
   // Level 2 — zones for the expanded project
   String? _expandedProject;
-  List<Map<String, dynamic>> _zoneList = [];
+  List<ShiftDashRow> _zoneList = [];
   bool _zoneLoading = false;
   String? _zoneError;
 
   // Level 3 — wards for the expanded zone
   String? _expandedZone;
-  List<Map<String, dynamic>> _wardList = [];
+  List<ShiftDashRow> _wardList = [];
   bool _wardLoading = false;
   String? _wardError;
+
+  // Creator view. Scoped to the expanded zone unless the user turns that off.
+  List<ShiftDashRow> _creatorList = [];
+  bool _creatorLoading = false;
+  String? _creatorError;
+  bool _creatorZoneScoped = true;
+
+  /// Filters the creator list was loaded for, so switching back to the view
+  /// does not refetch unless something changed.
+  String? _creatorKey;
+
+  String? get _creatorZone => _creatorZoneScoped ? _expandedZone : null;
 
   @override
   void initState() {
@@ -63,31 +79,23 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
     _init();
   }
 
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('menu', 'shift_dashboard');
-    username = prefs.getString('username');
-    password = prefs.getString('password');
     _fetchProjects();
   }
 
-  String get _dateStr => DateFormat('yyyy-MM-dd').format(_selectedDate);
-
-  Map<String, String> get _authHeaders {
-    final auth = 'Basic ${base64Encode(utf8.encode('$username:$password'))}';
-    return {'Content-Type': 'application/json', 'authorization': auth};
-  }
-
-  Map<String, String> _baseParams() {
-    // Every filter is date-scoped: send the selected date with each request.
-    return {'shift_status': _shiftStatus, 'date': _dateStr};
-  }
-
-  /// Authenticated GET. Logging is done by services/http_client.dart.
-  Future<http.Response> _loggedGet(Uri uri) =>
-      http.get(uri, headers: _authHeaders);
+  static String _errorText(Object e) =>
+      e is DashApiException ? e.message : 'Network error. Please retry.';
 
   Future<void> _fetchProjects() async {
+    final query = _query;
     setState(() {
       _projectLoading = true;
       _projectError = null;
@@ -96,79 +104,83 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
       _expandedZone = null;
     });
     try {
-      final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_project_v2/')
-          .replace(queryParameters: _baseParams());
-      final resp = await _loggedGet(uri);
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body) as Map;
-        final list = data[_shiftStatus] as List? ?? [];
-        setState(() {
-          _projectList =
-              list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-        });
-      } else {
-        setState(() => _projectError = 'Server error (${resp.statusCode})');
-      }
-    } catch (_) {
-      setState(() => _projectError = 'Network error. Please retry.');
+      final rows = await _api.byProject(query);
+      if (!mounted || query != _query) return;
+      setState(() => _projectList = rows);
+    } catch (e) {
+      if (!mounted || query != _query) return;
+      setState(() => _projectError = _errorText(e));
     } finally {
-      setState(() => _projectLoading = false);
+      if (mounted && query == _query) setState(() => _projectLoading = false);
     }
   }
 
   Future<void> _fetchZones(String project) async {
+    final query = _query;
     setState(() {
       _zoneLoading = true;
       _zoneError = null;
       _zoneList = [];
     });
     try {
-      final params = _baseParams()..['project'] = project;
-      final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_zone_v2/')
-          .replace(queryParameters: params);
-      final resp = await _loggedGet(uri);
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body) as Map;
-        final list = data[_shiftStatus] as List? ?? [];
-        setState(() {
-          _zoneList =
-              list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-        });
-      } else {
-        setState(() => _zoneError = 'Server error (${resp.statusCode})');
-      }
-    } catch (_) {
-      setState(() => _zoneError = 'Network error. Please retry.');
+      final rows = await _api.byZone(query, project: project);
+      if (!mounted || query != _query || _expandedProject != project) return;
+      setState(() => _zoneList = rows);
+    } catch (e) {
+      if (!mounted || query != _query || _expandedProject != project) return;
+      setState(() => _zoneError = _errorText(e));
     } finally {
-      setState(() => _zoneLoading = false);
+      if (mounted && query == _query && _expandedProject == project) {
+        setState(() => _zoneLoading = false);
+      }
     }
   }
 
   Future<void> _fetchWards(String zone) async {
+    final query = _query;
     setState(() {
       _wardLoading = true;
       _wardError = null;
       _wardList = [];
     });
     try {
-      final params = _baseParams()..['zone_code'] = zone;
-      final uri = Uri.parse('$_baseUrl/drf_shift_dash_by_ward_v2/')
-          .replace(queryParameters: params);
-      final resp = await _loggedGet(uri);
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body) as Map;
-        final list = data[_shiftStatus] as List? ?? [];
-        setState(() {
-          _wardList =
-              list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-        });
-      } else {
-        setState(() => _wardError = 'Server error (${resp.statusCode})');
-      }
-    } catch (_) {
-      setState(() => _wardError = 'Network error. Please retry.');
+      final rows = await _api.byWard(query, zoneCode: zone);
+      if (!mounted || query != _query || _expandedZone != zone) return;
+      setState(() => _wardList = rows);
+    } catch (e) {
+      if (!mounted || query != _query || _expandedZone != zone) return;
+      setState(() => _wardError = _errorText(e));
     } finally {
-      setState(() => _wardLoading = false);
+      if (mounted && query == _query && _expandedZone == zone) {
+        setState(() => _wardLoading = false);
+      }
+    }
+  }
+
+  /// Loads the creator list unless it is already loaded for these filters.
+  Future<void> _ensureCreators({bool force = false}) async {
+    final query = _query;
+    final zone = _creatorZone;
+    final key = query.key(zone);
+    if (!force && key == _creatorKey && _creatorError == null) return;
+
+    setState(() {
+      _creatorKey = key;
+      _creatorLoading = true;
+      _creatorError = null;
+      _creatorList = [];
+    });
+    try {
+      final rows = await _api.byCreator(query, zoneCode: zone);
+      if (!mounted || _creatorKey != key) return;
+      setState(() => _creatorList = rows);
+    } catch (e) {
+      if (!mounted || _creatorKey != key) return;
+      setState(() => _creatorError = _errorText(e));
+    } finally {
+      if (mounted && _creatorKey == key) {
+        setState(() => _creatorLoading = false);
+      }
     }
   }
 
@@ -203,50 +215,48 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
     }
   }
 
-  void _goToQueried(Map<String, String?> extra) {
-    final params = <String, String?>{
-      'shift_status': _shiftStatus,
-      'date': _dateStr,
-      ...extra,
-    };
-    // Breadcrumb hierarchy (display only — does not change the API query). The
-    // drill-down sends only the deepest filter, but we carry the parent
-    // project/zone so the queried page can render Projects › MDU › MDU-Z1,
-    // mirroring the GVP Dashboard.
-    final projectLabel = extra['project'] ?? _expandedProject;
-    final zoneLabel =
-        extra['zone'] ?? (extra['ward_code'] != null ? _expandedZone : null);
-    final wardLabel = extra['ward_code'];
+  void _goToQueried(ShiftListFilter filter) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => QueriedShiftsPage(
-          params: params,
-          username: username!,
-          password: password!,
-          project: projectLabel,
-          zone: zoneLabel,
-          ward: wardLabel,
-        ),
-      ),
+      MaterialPageRoute(builder: (_) => QueriedShiftsPage(filter: filter)),
     );
+  }
+
+  /// Applies a status/date change: reloads the projects, and the creators too
+  /// when that view is showing (otherwise they reload when next shown).
+  void _applyQuery(ShiftDashQuery next) {
+    if (next == _query) return;
+    setState(() => _query = next);
+    _fetchProjects();
+    if (_view == _DashView.creator) _ensureCreators();
   }
 
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDate,
+      initialDate: _query.date,
       firstDate: DateTime(2020),
       lastDate: DateTime.now(),
     );
-    if (picked != null && picked != _selectedDate) {
-      setState(() {
-        _selectedDate = picked;
-        _expandedProject = null;
-        _expandedZone = null;
-      });
-      _fetchProjects();
-    }
+    if (picked != null) _applyQuery(_query.copyWith(date: picked));
+  }
+
+  void _selectFilter(ShiftStatus status) =>
+      _applyQuery(_query.copyWith(status: status));
+
+  void _goToView(_DashView view) {
+    if (_view == view) return;
+    _pageController.animateToPage(
+      view.index,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _onPageChanged(int index) {
+    final view = _DashView.values[index];
+    setState(() => _view = view);
+    if (view == _DashView.creator) _ensureCreators();
   }
 
   // ── Build ────────────────────────────────────────────────────────────────
@@ -278,26 +288,23 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
       body: Column(
         children: [
           _buildControls(),
-          Expanded(child: _buildProjectBody()),
+          Expanded(
+            child: PageView(
+              controller: _pageController,
+              onPageChanged: _onPageChanged,
+              children: [_buildProjectBody(), _buildCreatorBody()],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  void _selectFilter(String status) {
-    if (_shiftStatus == status) return;
-    setState(() {
-      _shiftStatus = status;
-      _expandedProject = null;
-      _expandedZone = null;
-    });
-    _fetchProjects();
-  }
-
   Widget _buildControls() {
     final primary = Theme.of(context).colorScheme.primary;
+    final status = _query.status;
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         boxShadow: [
@@ -311,67 +318,110 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Date pill — always visible, right-aligned.
-          Row(
-            children: [
-              const Spacer(),
-              _buildDatePill(primary),
-            ],
-          ),
-          const SizedBox(height: 10),
-          // Status filter tabs — horizontally scrollable so the five options
-          // never overflow on narrow screens.
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                color: Colors.black.withAlpha(40),
-                border: Border.all(
-                  color: Colors.white.withAlpha(18),
-                  width: 1,
+          // View switcher (also reachable by swiping), full width so both
+          // tabs stay visible on the narrowest phones.
+          _segmented([
+            for (final v in _DashView.values)
+              Expanded(
+                child: _StatusTab(
+                  label: v.label,
+                  isActive: _view == v,
+                  onTap: () => _goToView(v),
                 ),
               ),
-              padding: const EdgeInsets.all(3),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final filter in _kShiftFilters)
-                    _StatusTab(
-                      label: filter,
-                      isActive: _shiftStatus == filter,
-                      onTap: () => _selectFilter(filter),
-                    ),
-                ],
+          ], expand: true),
+          const SizedBox(height: 10),
+          // Status filter tabs — four equal segments; labels scale down
+          // rather than overflow on narrow screens or large text sizes.
+          _segmented([
+            for (final s in ShiftStatus.values)
+              Expanded(
+                child: _StatusTab(
+                  label: s.apiValue,
+                  dotColor: s.color,
+                  isActive: status == s,
+                  onTap: () => _selectFilter(s),
+                ),
               ),
-            ),
+          ], expand: true),
+          const SizedBox(height: 8),
+          // What the selected status means + the date it applies to.
+          Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                margin: const EdgeInsets.only(right: 6),
+                decoration: BoxDecoration(
+                  color: status.color,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  status.description,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withAlpha(150),
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _buildDatePill(primary),
+            ],
           ),
         ],
       ),
     );
   }
 
+  Widget _segmented(List<Widget> tabs, {bool expand = false}) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        color: Colors.black.withAlpha(40),
+        border: Border.all(color: Colors.white.withAlpha(18), width: 1),
+      ),
+      padding: const EdgeInsets.all(3),
+      child: Row(
+        mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
+        children: tabs,
+      ),
+    );
+  }
+
   Widget _buildDatePill(Color primary) {
+    // Unclosed spans every date, so the picker is disabled for it.
+    final usesDate = _query.status.usesDate;
+    final color = usesDate
+        ? primary
+        : Theme.of(context).colorScheme.onSurface.withAlpha(140);
     return GestureDetector(
-      onTap: _pickDate,
+      onTap: usesDate ? _pickDate : null,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: primary.withAlpha(140), width: 1.2),
-          color: primary.withAlpha(22),
+          border: Border.all(color: color.withAlpha(140), width: 1.2),
+          color: color.withAlpha(22),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.calendar_month_outlined, size: 14, color: primary),
+            Icon(Icons.calendar_month_outlined, size: 14, color: color),
             const SizedBox(width: 6),
             Text(
-              DateFormat('dd MMM yyyy').format(_selectedDate),
+              usesDate
+                  ? DateFormat('dd MMM yyyy').format(_query.date)
+                  : 'All dates',
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: primary,
+                color: color,
               ),
             ),
           ],
@@ -380,38 +430,41 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
     );
   }
 
-  // ── Level 1 body ─────────────────────────────────────────────────────────
+  // ── By Location: Level 1 body ────────────────────────────────────────────
 
   Widget _buildProjectBody() {
     if (_projectLoading) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_projectError != null) {
-      return _FullPageError(
-          message: _projectError!, onRetry: _fetchProjects);
+      return _FullPageError(message: _projectError!, onRetry: _fetchProjects);
     }
     if (_projectList.isEmpty) {
-      return const _FullPageEmpty(message: 'No shift data available');
+      return _FullPageEmpty(
+        message: 'No shift data available',
+        onRefresh: _fetchProjects,
+      );
     }
     return RefreshIndicator(
       onRefresh: _fetchProjects,
       child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(12, 14, 12, 24),
+        // Keeps the scroll offset when swiping away and back.
+        key: const PageStorageKey('shift-dash-location'),
+        padding: const EdgeInsets.fromLTRB(12, 14, 12, 88),
         itemCount: _projectList.length,
         itemBuilder: (context, i) {
           final row = _projectList[i];
-          final project = row['project']?.toString() ?? '';
-          if (project.isEmpty) return const SizedBox.shrink();
+          final project = row.label;
           final isExp = _expandedProject == project;
+          final filter = ShiftListFilter(query: _query, project: project);
           return _ProjectCard(
             label: project,
-            count: (row['total'] as num?)?.toInt() ?? 0,
+            count: row.total,
             row: row,
             isExpanded: isExp,
             onToggle: () => _toggleProject(project),
-            onTotalTap: () => _goToQueried({'project': project}),
-            onChipTap: (vt) =>
-                _goToQueried({'project': project, 'vehicle_type': vt}),
+            onTotalTap: () => _goToQueried(filter),
+            onChipTap: (vt) => _goToQueried(filter.withVehicleType(vt)),
             expandedChild: isExp ? _buildZoneSection(project) : null,
           );
         },
@@ -425,24 +478,29 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
     if (_zoneLoading) return const _InlineLoader();
     if (_zoneError != null) {
       return _InlineError(
-          message: _zoneError!, onRetry: () => _fetchZones(project));
+        message: _zoneError!,
+        onRetry: () => _fetchZones(project),
+      );
     }
     if (_zoneList.isEmpty) return const _InlineEmpty();
     return Column(
       children: _zoneList.map((row) {
-        final zone = row['zone']?.toString() ?? '';
-        if (zone.isEmpty) return const SizedBox.shrink();
+        final zone = row.label;
         final isExp = _expandedZone == zone;
+        final filter = ShiftListFilter(
+          query: _query,
+          project: project,
+          zoneCode: zone,
+        );
         return _ZoneRow(
           label: zone,
-          count: (row['total'] as num?)?.toInt() ?? 0,
+          count: row.total,
           row: row,
           isExpanded: isExp,
           onToggle: () => _toggleZone(zone),
-          onTotalTap: () => _goToQueried({'zone': zone}),
-          onChipTap: (vt) =>
-              _goToQueried({'zone': zone, 'vehicle_type': vt}),
-          expandedChild: isExp ? _buildWardSection(zone) : null,
+          onTotalTap: () => _goToQueried(filter),
+          onChipTap: (vt) => _goToQueried(filter.withVehicleType(vt)),
+          expandedChild: isExp ? _buildWardSection(project, zone) : null,
         );
       }).toList(),
     );
@@ -450,26 +508,108 @@ class _ShiftDashboardPageState extends State<ShiftDashboardPage> {
 
   // ── Level 3 section ──────────────────────────────────────────────────────
 
-  Widget _buildWardSection(String zone) {
+  Widget _buildWardSection(String project, String zone) {
     if (_wardLoading) return const _InlineLoader();
     if (_wardError != null) {
       return _InlineError(
-          message: _wardError!, onRetry: () => _fetchWards(zone));
+        message: _wardError!,
+        onRetry: () => _fetchWards(zone),
+      );
     }
     if (_wardList.isEmpty) return const _InlineEmpty();
     return Column(
       children: _wardList.map((row) {
-        final ward = row['ward']?.toString() ?? '';
-        if (ward.isEmpty) return const SizedBox.shrink();
+        final ward = row.label;
+        final filter = ShiftListFilter(
+          query: _query,
+          project: project,
+          zoneCode: zone,
+          wardCode: ward,
+        );
+        // Ward totals are distinct counts from the API — shown as returned.
         return _WardRow(
           label: ward,
-          count: (row['total'] as num?)?.toInt() ?? 0,
+          count: row.total,
           row: row,
-          onTotalTap: () => _goToQueried({'ward_code': ward}),
-          onChipTap: (vt) =>
-              _goToQueried({'ward_code': ward, 'vehicle_type': vt}),
+          onTotalTap: () => _goToQueried(filter),
+          onChipTap: (vt) => _goToQueried(filter.withVehicleType(vt)),
         );
       }).toList(),
+    );
+  }
+
+  // ── By Creator ───────────────────────────────────────────────────────────
+
+  Widget _buildCreatorBody() {
+    return Column(
+      children: [
+        if (_expandedZone != null) _buildCreatorScope(),
+        Expanded(child: _buildCreatorList()),
+      ],
+    );
+  }
+
+  /// Lets the user scope creators to the zone expanded in By Location.
+  Widget _buildCreatorScope() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: FilterChip(
+          label: Text('Zone $_expandedZone only'),
+          selected: _creatorZoneScoped,
+          onSelected: (on) {
+            setState(() => _creatorZoneScoped = on);
+            _ensureCreators();
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCreatorList() {
+    if (_creatorLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_creatorError != null) {
+      return _FullPageError(
+        message: _creatorError!,
+        onRetry: () => _ensureCreators(force: true),
+      );
+    }
+    if (_creatorList.isEmpty) {
+      return _FullPageEmpty(
+        message: 'No shifts started in this period',
+        onRefresh: () => _ensureCreators(force: true),
+      );
+    }
+    final zone = _creatorZone;
+    return RefreshIndicator(
+      onRefresh: () => _ensureCreators(force: true),
+      child: ListView.builder(
+        key: const PageStorageKey('shift-dash-creator'),
+        padding: const EdgeInsets.fromLTRB(12, 14, 12, 88),
+        itemCount: _creatorList.length,
+        itemBuilder: (context, i) {
+          final row = _creatorList[i];
+          final filter = ShiftListFilter(
+            query: _query,
+            zoneCode: zone,
+            // createdby is the employee id; the code is display only.
+            createdBy: row.createdBy,
+            creatorLabel: row.label,
+          );
+          return _CreatorCard(
+            row: row,
+            onTotalTap: row.createdBy == null
+                ? null
+                : () => _goToQueried(filter),
+            onChipTap: row.createdBy == null
+                ? null
+                : (vt) => _goToQueried(filter.withVehicleType(vt)),
+          );
+        },
+      ),
     );
   }
 }
@@ -481,46 +621,77 @@ class _StatusTab extends StatelessWidget {
   final bool isActive;
   final VoidCallback onTap;
 
+  /// Optional status colour, shown as a dot before the label.
+  final Color? dotColor;
+
   const _StatusTab({
     required this.label,
     required this.isActive,
     required this.onTap,
+    this.dotColor,
   });
 
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeInOut,
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
-          color: isActive ? primary : Colors.transparent,
-          boxShadow: isActive
-              ? [
-                  BoxShadow(
-                    color: primary.withAlpha(80),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
+    return Semantics(
+      button: true,
+      selected: isActive,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          constraints: const BoxConstraints(minHeight: 36),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            color: isActive ? primary : Colors.transparent,
+            boxShadow: isActive
+                ? [
+                    BoxShadow(
+                      color: primary.withAlpha(80),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
+          ),
+          // Fills its segment; scales the label down rather than overflow.
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (dotColor != null)
+                  Container(
+                    width: 7,
+                    height: 7,
+                    margin: const EdgeInsets.only(right: 6),
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                      border: isActive
+                          ? Border.all(color: Colors.white, width: 1)
+                          : null,
+                    ),
                   ),
-                ]
-              : null,
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: isActive ? FontWeight.w700 : FontWeight.w400,
-            color: isActive
-                ? Theme.of(context).colorScheme.onPrimary
-                : Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withAlpha(160),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w400,
+                    color: isActive
+                        ? Theme.of(context).colorScheme.onPrimary
+                        : Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withAlpha(160),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -533,7 +704,7 @@ class _StatusTab extends StatelessWidget {
 class _ProjectCard extends StatelessWidget {
   final String label;
   final int count;
-  final Map<String, dynamic> row;
+  final ShiftDashRow row;
   final bool isExpanded;
   final VoidCallback onToggle;
   final VoidCallback onTotalTap;
@@ -556,8 +727,7 @@ class _ProjectCard extends StatelessWidget {
     final primary = Theme.of(context).colorScheme.primary;
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       clipBehavior: Clip.antiAlias,
       elevation: 3,
       child: Column(
@@ -568,9 +738,7 @@ class _ProjectCard extends StatelessWidget {
             onTap: onToggle,
             child: Container(
               decoration: BoxDecoration(
-                border: Border(
-                  left: BorderSide(color: primary, width: 4),
-                ),
+                border: Border(left: BorderSide(color: primary, width: 4)),
               ),
               padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
               child: Column(
@@ -590,33 +758,15 @@ class _ProjectCard extends StatelessWidget {
                         ),
                       ),
                       // Clickable total count badge
-                      GestureDetector(
+                      _CountBadge(
+                        count: count,
+                        color: primary,
                         onTap: onTotalTap,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: primary.withAlpha(28),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                                color: primary.withAlpha(110), width: 1.2),
-                          ),
-                          child: Text(
-                            '$count',
-                            style: TextStyle(
-                              color: primary,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
                       ),
                       const SizedBox(width: 2),
                       // Animated expand chevron
                       Semantics(
-                        label: isExpanded
-                            ? 'Collapse $label'
-                            : 'Expand $label',
+                        label: isExpanded ? 'Collapse $label' : 'Expand $label',
                         button: true,
                         excludeSemantics: true,
                         child: IconButton(
@@ -626,12 +776,17 @@ class _ProjectCard extends StatelessWidget {
                               : 'Expand $label',
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(
-                              minWidth: 36, minHeight: 36),
+                            minWidth: 36,
+                            minHeight: 36,
+                          ),
                           icon: AnimatedRotation(
                             turns: isExpanded ? 0.5 : 0.0,
                             duration: const Duration(milliseconds: 250),
-                            child: Icon(Icons.keyboard_arrow_down,
-                                color: primary, size: 24),
+                            child: Icon(
+                              Icons.keyboard_arrow_down,
+                              color: primary,
+                              size: 24,
+                            ),
                           ),
                         ),
                       ),
@@ -639,7 +794,10 @@ class _ProjectCard extends StatelessWidget {
                   ),
                   // Vehicle type chips
                   _VehicleChipRow(
-                      row: row, onChipTap: onChipTap, compact: false),
+                    row: row,
+                    onChipTap: onChipTap,
+                    compact: false,
+                  ),
                 ],
               ),
             ),
@@ -654,7 +812,9 @@ class _ProjectCard extends StatelessWidget {
                   color: Colors.black.withAlpha(28),
                   border: Border(
                     top: BorderSide(
-                        color: Colors.white.withAlpha(15), width: 1),
+                      color: Colors.white.withAlpha(15),
+                      width: 1,
+                    ),
                   ),
                 ),
                 child: expandedChild,
@@ -666,12 +826,132 @@ class _ProjectCard extends StatelessWidget {
   }
 }
 
+// ── Creator card ─────────────────────────────────────────────────────────────
+
+class _CreatorCard extends StatelessWidget {
+  final ShiftDashRow row;
+  final VoidCallback? onTotalTap;
+  final void Function(String)? onChipTap;
+
+  const _CreatorCard({
+    required this.row,
+    required this.onTotalTap,
+    required this.onChipTap,
+  });
+
+  static const _accent = Color(0xFF7E57C2);
+
+  @override
+  Widget build(BuildContext context) {
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      clipBehavior: Clip.antiAlias,
+      elevation: 3,
+      child: InkWell(
+        onTap: onTotalTap,
+        child: Container(
+          decoration: const BoxDecoration(
+            border: Border(left: BorderSide(color: _accent, width: 4)),
+          ),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundColor: _accent.withAlpha(40),
+                    child: const Icon(
+                      Icons.person_outline,
+                      size: 20,
+                      color: _accent,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          row.label,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (row.employeeCode != null)
+                          Text(
+                            row.employeeCode!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: onSurface.withAlpha(150),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _CountBadge(
+                    count: row.total,
+                    color: _accent,
+                    onTap: onTotalTap,
+                  ),
+                ],
+              ),
+              _VehicleChipRow(
+                row: row,
+                onChipTap: onChipTap ?? (_) {},
+                compact: false,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CountBadge extends StatelessWidget {
+  final int count;
+  final Color color;
+  final VoidCallback? onTap;
+
+  const _CountBadge({required this.count, required this.color, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: color.withAlpha(28),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withAlpha(110), width: 1.2),
+        ),
+        child: Text(
+          '$count',
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── Level 2 — Zone Row ───────────────────────────────────────────────────────
 
 class _ZoneRow extends StatelessWidget {
   final String label;
   final int count;
-  final Map<String, dynamic> row;
+  final ShiftDashRow row;
   final bool isExpanded;
   final VoidCallback onToggle;
   final VoidCallback onTotalTap;
@@ -725,7 +1005,10 @@ class _ZoneRow extends StatelessWidget {
                         ),
                       ),
                       _VehicleChipRow(
-                          row: row, onChipTap: onChipTap, compact: true),
+                        row: row,
+                        onChipTap: onChipTap,
+                        compact: true,
+                      ),
                     ],
                   ),
                 ),
@@ -735,12 +1018,16 @@ class _ZoneRow extends StatelessWidget {
                   onTap: onTotalTap,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: _accent.withAlpha(28),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
-                          color: _accent.withAlpha(100), width: 1.1),
+                        color: _accent.withAlpha(100),
+                        width: 1.1,
+                      ),
                     ),
                     child: Text(
                       '$count',
@@ -759,16 +1046,20 @@ class _ZoneRow extends StatelessWidget {
                   excludeSemantics: true,
                   child: IconButton(
                     onPressed: onToggle,
-                    tooltip:
-                        isExpanded ? 'Collapse $label' : 'Expand $label',
+                    tooltip: isExpanded ? 'Collapse $label' : 'Expand $label',
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(
-                        minWidth: 32, minHeight: 32),
+                      minWidth: 32,
+                      minHeight: 32,
+                    ),
                     icon: AnimatedRotation(
                       turns: isExpanded ? 0.5 : 0.0,
                       duration: const Duration(milliseconds: 250),
-                      child: const Icon(Icons.keyboard_arrow_down,
-                          size: 20, color: _accent),
+                      child: const Icon(
+                        Icons.keyboard_arrow_down,
+                        size: 20,
+                        color: _accent,
+                      ),
                     ),
                   ),
                 ),
@@ -785,18 +1076,13 @@ class _ZoneRow extends StatelessWidget {
               margin: const EdgeInsets.only(left: 32),
               decoration: BoxDecoration(
                 border: Border(
-                  left: BorderSide(
-                      color: _accent.withAlpha(70), width: 1.5),
+                  left: BorderSide(color: _accent.withAlpha(70), width: 1.5),
                 ),
               ),
               child: expandedChild,
             ),
           ),
-        Divider(
-          height: 1,
-          indent: 32,
-          color: Colors.white.withAlpha(15),
-        ),
+        Divider(height: 1, indent: 32, color: Colors.white.withAlpha(15)),
       ],
     );
   }
@@ -807,7 +1093,7 @@ class _ZoneRow extends StatelessWidget {
 class _WardRow extends StatelessWidget {
   final String label;
   final int count;
-  final Map<String, dynamic> row;
+  final ShiftDashRow row;
   final VoidCallback onTotalTap;
   final void Function(String) onChipTap;
 
@@ -842,10 +1128,7 @@ class _WardRow extends StatelessWidget {
             flex: 2,
             child: Text(
               label,
-              style: TextStyle(
-                fontSize: 12,
-                color: onSurface.withAlpha(210),
-              ),
+              style: TextStyle(fontSize: 12, color: onSurface.withAlpha(210)),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -854,13 +1137,11 @@ class _WardRow extends StatelessWidget {
           GestureDetector(
             onTap: onTotalTap,
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
               decoration: BoxDecoration(
                 color: primary.withAlpha(22),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                    color: primary.withAlpha(70), width: 0.8),
+                border: Border.all(color: primary.withAlpha(70), width: 0.8),
               ),
               child: Text(
                 '$count',
@@ -879,36 +1160,36 @@ class _WardRow extends StatelessWidget {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
-                children: _kVehicleTypes
-                    .where((vt) =>
-                        row[vt] is num && (row[vt] as num) > 0)
-                    .map((vt) {
-                  final color =
-                      _kVehicleColors[vt] ?? Colors.grey;
-                  final abbr = vt.length > 3
-                      ? vt.substring(0, 3)
-                      : vt;
+                children: row.vehicleCounts.entries.map((e) {
+                  final vt = e.key;
+                  final color = vehicleTypeColor(vt);
+                  final abbr = vt.length > 3 ? vt.substring(0, 3) : vt;
                   return Padding(
                     padding: const EdgeInsets.only(right: 4),
                     child: GestureDetector(
                       onTap: () => onChipTap(vt),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: color.withAlpha(22),
-                          borderRadius:
-                              BorderRadius.circular(8),
-                          border: Border.all(
+                      child: Tooltip(
+                        message: vt,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: color.withAlpha(22),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
                               color: color.withAlpha(80),
-                              width: 0.8),
-                        ),
-                        child: Text(
-                          '$abbr ${(row[vt] as num).toInt()}',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: color,
-                            fontWeight: FontWeight.w600,
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Text(
+                            '$abbr ${e.value}',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: color,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                       ),
@@ -924,10 +1205,10 @@ class _WardRow extends StatelessWidget {
   }
 }
 
-// ── Shared vehicle chip row (L1 and L2) ──────────────────────────────────────
+// ── Shared vehicle chip row ──────────────────────────────────────────────────
 
 class _VehicleChipRow extends StatelessWidget {
-  final Map<String, dynamic> row;
+  final ShiftDashRow row;
   final void Function(String) onChipTap;
   final bool compact;
 
@@ -939,18 +1220,17 @@ class _VehicleChipRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final chips = _kVehicleTypes
-        .where((vt) => row[vt] is num && (row[vt] as num) > 0)
-        .toList();
+    // Only the types present in this row — the API omits zero counts.
+    final chips = row.vehicleCounts.entries.toList();
     if (chips.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: EdgeInsets.only(top: compact ? 5 : 8),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
-          children: chips.map((vt) {
-            final color = _kVehicleColors[vt] ?? Colors.grey;
-            final cnt = (row[vt] as num).toInt();
+          children: chips.map((e) {
+            final vt = e.key;
+            final color = vehicleTypeColor(vt);
             return Padding(
               padding: const EdgeInsets.only(right: 6),
               child: GestureDetector(
@@ -963,8 +1243,7 @@ class _VehicleChipRow extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: color.withAlpha(22),
                     borderRadius: BorderRadius.circular(20),
-                    border:
-                        Border.all(color: color.withAlpha(100), width: 1),
+                    border: Border.all(color: color.withAlpha(100), width: 1),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -979,7 +1258,7 @@ class _VehicleChipRow extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        '$vt  $cnt',
+                        '$vt  ${e.value}',
                         style: TextStyle(
                           fontSize: compact ? 11 : 12,
                           color: color,
@@ -1024,14 +1303,20 @@ class _InlineError extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         children: [
-          Icon(Icons.error_outline,
-              size: 16, color: Theme.of(context).colorScheme.error),
+          Icon(
+            Icons.error_outline,
+            size: 16,
+            color: Theme.of(context).colorScheme.error,
+          ),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(message,
-                style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.error)),
+            child: Text(
+              message,
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
           ),
           TextButton(
             onPressed: onRetry,
@@ -1052,17 +1337,17 @@ class _InlineEmpty extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       child: Row(
         children: [
-          Icon(Icons.inbox_outlined,
-              size: 16,
-              color:
-                  Theme.of(context).colorScheme.onSurface.withAlpha(100)),
+          Icon(
+            Icons.inbox_outlined,
+            size: 16,
+            color: Theme.of(context).colorScheme.onSurface.withAlpha(100),
+          ),
           const SizedBox(width: 8),
           Text(
             'No data',
             style: TextStyle(
               fontSize: 12,
-              color:
-                  Theme.of(context).colorScheme.onSurface.withAlpha(100),
+              color: Theme.of(context).colorScheme.onSurface.withAlpha(100),
             ),
           ),
         ],
@@ -1087,21 +1372,18 @@ class _FullPageError extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.wifi_off_rounded,
-                size: 52,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withAlpha(100)),
+            Icon(
+              Icons.wifi_off_rounded,
+              size: 52,
+              color: Theme.of(context).colorScheme.onSurface.withAlpha(100),
+            ),
             const SizedBox(height: 16),
             Text(
               message,
               textAlign: TextAlign.center,
               style: TextStyle(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurface
-                      .withAlpha(160)),
+                color: Theme.of(context).colorScheme.onSurface.withAlpha(160),
+              ),
             ),
             const SizedBox(height: 20),
             ElevatedButton.icon(
@@ -1116,36 +1398,50 @@ class _FullPageError extends StatelessWidget {
   }
 }
 
+/// Empty state that still supports pull-to-refresh.
 class _FullPageEmpty extends StatelessWidget {
   final String message;
+  final Future<void> Function() onRefresh;
 
-  const _FullPageEmpty({required this.message});
+  const _FullPageEmpty({required this.message, required this.onRefresh});
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(36),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: LayoutBuilder(
+        builder: (context, constraints) => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            Icon(
-              Icons.bar_chart_rounded,
-              size: 56,
-              color: Theme.of(context)
-                  .colorScheme
-                  .onSurface
-                  .withAlpha(70),
-            ),
-            const SizedBox(height: 14),
-            Text(
-              message,
-              style: TextStyle(
-                fontSize: 14,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withAlpha(120),
+            SizedBox(
+              height: constraints.maxHeight,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(36),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.bar_chart_rounded,
+                        size: 56,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withAlpha(70),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        message,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withAlpha(120),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],

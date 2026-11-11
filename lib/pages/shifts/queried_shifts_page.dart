@@ -1,21 +1,14 @@
-import 'dart:convert';
-import 'package:ourlandnew/services/http_client.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:intl/intl.dart';
-import 'package:ourlandnew/config.dart';
+import 'package:ourlandnew/services/dash_api.dart';
 import 'rotate_shift.dart';
 import 'end_shift.dart';
+import 'shift_activity_image_page.dart';
+import 'shift_dash_models.dart';
+import 'shift_dash_service.dart';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-const _kVtColors = <String, Color>{
-  'Tipper':    Color(0xFFFF7043),
-  'Tractor':   Color(0xFF42A5F5),
-  'LCV':       Color(0xFF66BB6A),
-  'EMV':       Color(0xFFAB47BC),
-  'Compactor': Color(0xFF26C6DA),
-};
 
 String _fmtDateTime(Object? val) {
   if (val == null) return '—';
@@ -37,38 +30,36 @@ String _fmtDate(Object? val) {
   }
 }
 
+/// Checklist values arrive as booleans or strings; blank reads as absent.
+String? _fmtValue(Object? val) {
+  if (val == null) return null;
+  if (val is bool) return val ? 'Yes' : 'No';
+  final s = val.toString().trim();
+  if (s.isEmpty) return null;
+  if (s.toLowerCase() == 'true') return 'Yes';
+  if (s.toLowerCase() == 'false') return 'No';
+  return s;
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
+/// The shift records behind a dashboard cell (drf_list_queried_shifts_v2).
 class QueriedShiftsPage extends StatefulWidget {
-  final Map<String, String?> params;
-  final String username;
-  final String password;
+  final ShiftListFilter filter;
 
-  /// Breadcrumb hierarchy (display only). Carried from the dashboard so the
-  /// page can render Projects › Project › Zone › Ward like the GVP Dashboard.
-  final String? project;
-  final String? zone;
-  final String? ward;
-
-  const QueriedShiftsPage({
-    super.key,
-    required this.params,
-    required this.username,
-    required this.password,
-    this.project,
-    this.zone,
-    this.ward,
-  });
+  const QueriedShiftsPage({super.key, required this.filter});
 
   @override
   State<QueriedShiftsPage> createState() => _QueriedShiftsPageState();
 }
 
 class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
-  List shifts = [];
+  final _api = ShiftDashboardApi.instance;
+  List<Map<String, dynamic>> shifts = [];
   bool isLoading = true;
   String? error;
-  final String _baseUrl = AppConfig.apiUrl;
+
+  ShiftListFilter get _filter => widget.filter;
 
   @override
   void initState() {
@@ -82,71 +73,40 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
       error = null;
     });
     try {
-      final cleanParams = Map<String, String>.fromEntries(
-        widget.params.entries
-            .where((e) => e.value != null)
-            .map((e) => MapEntry(e.key, e.value!)),
-      );
-      final uri = Uri.parse('$_baseUrl/drf_list_queried_shifts_v2/')
-          .replace(queryParameters: cleanParams);
-      final auth =
-          'Basic ${base64Encode(utf8.encode('${widget.username}:${widget.password}'))}';
-      final headers = {
-        'Content-Type': 'application/json',
-        'authorization': auth,
-      };
-      final response = await http.get(uri, headers: headers);
-      print('response__check');
-      print(response.statusCode);
-      print(response.body);
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        setState(() {
-          if (data is List) {
-            shifts = data;
-          } else if (data is Map) {
-            shifts = (data['results'] ?? data['shifts'] ?? data['data'] ?? [])
-                as List;
-          }
-        });
-      } else {
-        setState(() => error = 'Server error (${response.statusCode})');
-      }
+      final rows = await _api.queriedShifts(_filter);
+      if (!mounted) return;
+      setState(() => shifts = rows);
+    } on DashApiException catch (e) {
+      if (mounted) setState(() => error = e.message);
     } catch (_) {
-      setState(() => error = 'Network error. Please retry.');
+      if (mounted) setState(() => error = 'Network error. Please retry.');
     } finally {
-      setState(() => isLoading = false);
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
-  // ── Breadcrumb hierarchy (falls back to query params for safety) ────────────
-  String? get _project => widget.project ?? widget.params['project'];
-  String? get _zone => widget.zone ?? widget.params['zone'];
-  String? get _ward => widget.ward ?? widget.params['ward_code'];
-
-  bool get _isWardLevel => _ward != null;
-  bool get _isZoneLevel => _ward == null && _zone != null;
-  bool get _isProjectLevel => _ward == null && _zone == null;
-
   /// The deepest selected scope name — used as the AppBar title.
-  String get _title {
-    if (_ward != null) return _ward!;
-    if (_zone != null) return _zone!;
-    if (_project != null) return _project!;
-    return 'Shifts';
-  }
-
-  String? get _vehicleType => widget.params['vehicle_type'];
-  String? get _shiftStatus => widget.params['shift_status'];
+  String get _title =>
+      _filter.wardCode ??
+      _filter.creatorLabel ??
+      _filter.zoneCode ??
+      _filter.project ??
+      'Shifts';
 
   @override
   Widget build(BuildContext context) {
+    final byCreator = _filter.createdBy != null;
     final crumbs = <_Crumb>[
-      _Crumb('Projects', tappable: true),
-      if (_project != null) _Crumb(_project!, tappable: !_isProjectLevel),
-      if (_zone != null) _Crumb(_zone!, tappable: !_isZoneLevel),
-      if (_ward != null) _Crumb(_ward!, tappable: false),
+      _Crumb(byCreator ? 'Creators' : 'Projects', tappable: true),
+      if (_filter.project != null) _Crumb(_filter.project!, tappable: true),
+      if (_filter.zoneCode != null) _Crumb(_filter.zoneCode!, tappable: true),
+      if (_filter.wardCode != null) _Crumb(_filter.wardCode!, tappable: true),
+      if (_filter.creatorLabel != null)
+        _Crumb(_filter.creatorLabel!, tappable: true),
     ];
+    // The deepest crumb is this page.
+    crumbs[crumbs.length - 1] = _Crumb(crumbs.last.label, tappable: false);
+    final vehicleType = _filter.vehicleType;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -161,13 +121,12 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
                 fontSize: 16,
               ),
             ),
-            if (_vehicleType != null)
+            if (vehicleType != null)
               Text(
-                _vehicleType!,
+                vehicleType,
                 style: TextStyle(
                   fontSize: 12,
-                  color: _kVtColors[_vehicleType] ??
-                      Theme.of(context).colorScheme.primary,
+                  color: vehicleTypeColor(vehicleType),
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -233,32 +192,46 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
   }
 
   Widget _buildEmpty() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(36),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    return RefreshIndicator(
+      onRefresh: _fetchShifts,
+      child: LayoutBuilder(
+        builder: (context, constraints) => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            Icon(Icons.search_off_rounded,
-                size: 56,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withAlpha(70)),
-            const SizedBox(height: 14),
-            const Text(
-              'No shifts found',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Try adjusting your filters.',
-              style: TextStyle(
-                fontSize: 13,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withAlpha(120),
+            SizedBox(
+              height: constraints.maxHeight,
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(36),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.search_off_rounded,
+                          size: 56,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withAlpha(70)),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'No shifts found',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w500),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Try adjusting your filters.',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withAlpha(120),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],
@@ -270,38 +243,39 @@ class _QueriedShiftsPageState extends State<QueriedShiftsPage> {
   Widget _buildList() {
     return RefreshIndicator(
       onRefresh: _fetchShifts,
-      child: CustomScrollView(
-        slivers: [
-          // Result count + filter summary banner
-          SliverToBoxAdapter(
-            child: _ResultBanner(
-              count: shifts.length,
-              shiftStatus: _shiftStatus,
-              vehicleType: _vehicleType,
-              date: widget.params['date'],
-            ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final shift = shifts[index] as Map;
-                  return _ShiftCard(shift: shift);
-                },
-                childCount: shifts.length,
+      child: SlidableAutoCloseBehavior(
+        child: CustomScrollView(
+          slivers: [
+            // Result count + filter summary banner
+            SliverToBoxAdapter(
+              child: _ResultBanner(
+                count: shifts.length,
+                query: _filter.query,
+                vehicleType: _filter.vehicleType,
               ),
             ),
-          ),
-        ],
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _ShiftCard(
+                    shift: shifts[index],
+                    status: _filter.query.status,
+                  ),
+                  childCount: shifts.length,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-// ── Breadcrumb (Projects › Project › Zone › Ward) ─────────────────────────────
-// Mirrors the GVP Dashboard breadcrumb. Tapping any earlier crumb pops back to
-// the still-expanded Shift Dashboard, preserving the selected context.
+// ── Breadcrumb ────────────────────────────────────────────────────────────────
+// Tapping any earlier crumb pops back to the Shift Dashboard, which still holds
+// the selected filters and expanded project/zone.
 
 class _Breadcrumb extends StatelessWidget {
   final List<_Crumb> crumbs;
@@ -371,22 +345,19 @@ class _Crumb {
 
 class _ResultBanner extends StatelessWidget {
   final int count;
-  final String? shiftStatus;
+  final ShiftDashQuery query;
   final String? vehicleType;
-  final String? date;
 
   const _ResultBanner({
     required this.count,
-    this.shiftStatus,
+    required this.query,
     this.vehicleType,
-    this.date,
   });
 
   @override
   Widget build(BuildContext context) {
-    final vtColor = vehicleType != null
-        ? (_kVtColors[vehicleType] ?? Theme.of(context).colorScheme.primary)
-        : Theme.of(context).colorScheme.primary;
+    final status = query.status;
+    final onSurface = Theme.of(context).colorScheme.onSurface;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
@@ -394,68 +365,40 @@ class _ResultBanner extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-            color: Colors.white.withAlpha(15), width: 1),
+        border: Border.all(color: Colors.white.withAlpha(15), width: 1),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.list_alt_rounded,
-              size: 18,
-              color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 8),
-          Text(
-            '$count ${count == 1 ? 'shift' : 'shifts'} found',
-            style: const TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: 13,
-            ),
+          Row(
+            children: [
+              Icon(Icons.list_alt_rounded,
+                  size: 18, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '$count ${count == 1 ? 'shift' : 'shifts'} found',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              if (vehicleType != null) ...[
+                _Badge(
+                    label: vehicleType!, color: vehicleTypeColor(vehicleType)),
+                const SizedBox(width: 6),
+              ],
+              _Badge(label: status.apiValue, color: status.color),
+            ],
           ),
-          const Spacer(),
-          if (vehicleType != null)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: vtColor.withAlpha(25),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: vtColor.withAlpha(90)),
-              ),
-              child: Text(
-                vehicleType!,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: vtColor,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          if (vehicleType != null) const SizedBox(width: 6),
-          if (shiftStatus != null)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: shiftStatus == 'Unclosed'
-                    ? Colors.orange.withAlpha(25)
-                    : Colors.green.withAlpha(25),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: shiftStatus == 'Unclosed'
-                      ? Colors.orange.withAlpha(90)
-                      : Colors.green.withAlpha(90),
-                ),
-              ),
-              child: Text(
-                shiftStatus!,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: shiftStatus == 'Unclosed'
-                      ? Colors.orange
-                      : Colors.green,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+          const SizedBox(height: 4),
+          Text(
+            status.usesDate
+                ? '${status.description} · ${DateFormat('dd MMM yyyy').format(query.date)}'
+                : status.description,
+            style: TextStyle(fontSize: 11.5, color: onSurface.withAlpha(140)),
+          ),
         ],
       ),
     );
@@ -464,17 +407,60 @@ class _ResultBanner extends StatelessWidget {
 
 // ── Individual shift card ─────────────────────────────────────────────────────
 
-class _ShiftCard extends StatelessWidget {
-  final Map shift;
+class _ShiftCard extends StatefulWidget {
+  final Map<String, dynamic> shift;
 
-  const _ShiftCard({required this.shift});
+  /// The status the list was queried for. The backend classified every record
+  /// in the response by it, so it is shown as-is rather than re-derived from
+  /// the device clock.
+  final ShiftStatus status;
+
+  const _ShiftCard({required this.shift, required this.status});
+
+  @override
+  State<_ShiftCard> createState() => _ShiftCardState();
+}
+
+class _ShiftCardState extends State<_ShiftCard> {
+  bool _showDetails = false;
+
+  Map<String, dynamic> get shift => widget.shift;
+
+  /// Checklist and remark fields, shown under "Details" when present.
+  List<(IconData, String, String)> get _details => [
+        (Icons.business_outlined, 'Owner', _fmtValue(shift['owner'])),
+        (Icons.place_outlined, 'Zone', _fmtValue(shift['zone'])),
+        (Icons.badge_outlined, 'Licence',
+            _fmtValue(shift['acting_driver_license'])),
+        (Icons.notes_outlined, 'Driver note',
+            _fmtValue(shift['other_driver_remark'])),
+        (Icons.speaker_outlined, 'Audio', _fmtValue(shift['audio_system'])),
+        (Icons.delete_outline, 'Barrel', _fmtValue(shift['barrel'])),
+        (Icons.view_week_outlined, 'Rack', _fmtValue(shift['rack'])),
+        (Icons.cleaning_services_outlined, 'Broom', _fmtValue(shift['broom'])),
+        (Icons.shopping_basket_outlined, 'Annakoodai',
+            _fmtValue(shift['annakoodai'])),
+        (Icons.oil_barrel_outlined, 'Engine oil',
+            _fmtValue(shift['engine_oil_level'])),
+        (Icons.water_drop_outlined, 'Coolant',
+            _fmtValue(shift['coolant_oil_level'])),
+        (Icons.report_problem_outlined, 'Complaint',
+            _fmtValue(shift['complaint_details'])),
+        (Icons.comment_outlined, 'Remark', _fmtValue(shift['shift_remark'])),
+      ]
+          .where((d) => d.$3 != null)
+          .map((d) => (d.$1, d.$2, d.$3!))
+          .toList();
 
   @override
   Widget build(BuildContext context) {
+    final status = widget.status;
     final isActive = shift['end_time'] == null;
-    final vtColor =
-        _kVtColors[shift['vehicle_type']?.toString()] ?? Colors.grey;
+    final vehicleType = shift['vehicle_type']?.toString();
+    final vtColor = vehicleTypeColor(vehicleType);
     final shiftId = (shift['id'] as num?)?.toInt() ?? 0;
+    final details = _details;
+    final onSurface = Theme.of(context).colorScheme.onSurface;
 
     final card = Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -514,16 +500,10 @@ class _ShiftCard extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        _Badge(
-                          label: isActive ? 'Active' : 'Closed',
-                          color: isActive ? Colors.green : Colors.grey,
-                        ),
-                        if (shift['vehicle_type'] != null) ...[
+                        _Badge(label: status.apiValue, color: status.color),
+                        if (vehicleType != null) ...[
                           const SizedBox(height: 4),
-                          _Badge(
-                            label: shift['vehicle_type'].toString(),
-                            color: vtColor,
-                          ),
+                          _Badge(label: vehicleType, color: vtColor),
                         ],
                       ],
                     ),
@@ -534,27 +514,23 @@ class _ShiftCard extends StatelessWidget {
                 Row(
                   children: [
                     Icon(Icons.info_outline,
-                        size: 13,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withAlpha(120)),
+                        size: 13, color: onSurface.withAlpha(120)),
                     const SizedBox(width: 5),
-                    Text(
-                      [
-                        if (shift['shift_name'] != null)
-                          'Shift ${shift['shift_name']}',
-                        if (shift['zone_code'] != null)
-                          shift['zone_code'].toString(),
-                        if (shift['shift_date'] != null)
-                          _fmtDate(shift['shift_date']),
-                      ].join('  ·  '),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withAlpha(150),
+                    Expanded(
+                      child: Text(
+                        [
+                          if (shift['shift_name'] != null)
+                            'Shift ${shift['shift_name']}',
+                          if (shift['zone_code'] != null)
+                            shift['zone_code'].toString(),
+                          if (shift['shift_date'] != null)
+                            _fmtDate(shift['shift_date']),
+                        ].join('  ·  '),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: onSurface.withAlpha(150),
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -571,12 +547,17 @@ class _ShiftCard extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
             child: Column(
               children: [
+                // driverr: assigned driver's name, or the free-text name of a
+                // non-regular driver.
                 if (shift['driverr'] != null)
                   _InfoRow(
                     icon: Icons.person_outline,
                     label: 'Driver',
-                    value:
-                        '${shift['driverr']}  ·  ${shift['driver_type'] ?? ''}',
+                    value: [
+                      shift['driverr'].toString(),
+                      if (_fmtValue(shift['driver_type']) != null)
+                        _fmtValue(shift['driver_type'])!,
+                    ].join('  ·  '),
                   ),
                 if (shift['started_by'] != null)
                   _InfoRow(
@@ -637,6 +618,53 @@ class _ShiftCard extends StatelessWidget {
               ],
             ),
           ),
+
+          // ── Details (checklist, complaint, remark) ───────────────────────
+          if (details.isNotEmpty) ...[
+            Divider(height: 1, color: Colors.white.withAlpha(12)),
+            InkWell(
+              onTap: () => setState(() => _showDetails = !_showDetails),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Text(
+                      _showDetails ? 'Hide details' : 'Show details',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const Spacer(),
+                    AnimatedRotation(
+                      turns: _showDetails ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 200),
+                      child: Icon(Icons.keyboard_arrow_down,
+                          size: 18,
+                          color: Theme.of(context).colorScheme.primary),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeInOut,
+              child: _showDetails
+                  ? Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                      child: Column(
+                        children: [
+                          for (final d in details)
+                            _InfoRow(icon: d.$1, label: d.$2, value: d.$3),
+                        ],
+                      ),
+                    )
+                  : const SizedBox(width: double.infinity),
+            ),
+          ],
         ],
       ),
     );
@@ -645,6 +673,30 @@ class _ShiftCard extends StatelessWidget {
 
     return Slidable(
       key: ValueKey(shiftId),
+      // Left-to-right swipe: attach an activity photo to the current trip.
+      startActionPane: ActionPane(
+        motion: const ScrollMotion(),
+        extentRatio: 0.28,
+        children: [
+          SlidableAction(
+            onPressed: (_) => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ShiftActivityImagePage(
+                  shiftId: shiftId,
+                  vehicle: shift['vehicle']?.toString(),
+                ),
+              ),
+            ),
+            backgroundColor: Theme.of(context).colorScheme.primary,
+            foregroundColor: Colors.white,
+            borderRadius: BorderRadius.circular(15),
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            icon: Icons.add_a_photo_outlined,
+            label: 'Image',
+          ),
+        ],
+      ),
       endActionPane: ActionPane(
         motion: const ScrollMotion(),
         extentRatio: 0.5,
@@ -740,7 +792,7 @@ class _InfoRow extends StatelessWidget {
                   Theme.of(context).colorScheme.onSurface.withAlpha(130)),
           const SizedBox(width: 8),
           SizedBox(
-            width: 76,
+            width: 84,
             child: Text(
               label,
               style: TextStyle(
